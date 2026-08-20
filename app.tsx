@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   definePluginApp,
   experimental_NewThreadComposer as NewThreadComposer,
@@ -12,10 +12,56 @@ import type { rpcContract } from "./server";
 import type { RoutedThreadResult } from "./router";
 import type { AutorouterSettings } from "./settings";
 import { Input } from "@/components/ui/input";
+import {
+  SELECTING_LABEL_BASE,
+  SELECTING_LABEL_INTERVAL_MS,
+  selectingLabel,
+  toCssContentString,
+} from "./selecting-label";
 import "./autorouter.css";
 
 const AUTO_ROUTER_COMPOSE_LAYOUT_CLASS =
   "mx-auto flex w-full max-w-[760px] flex-col px-4 pb-4 pt-14";
+
+/**
+ * Drives the picker label's dot cycle. Idle rounds hold no timer, so the page
+ * is inert until a submission is actually being routed.
+ */
+function useSelectingLabel(active: boolean): string | null {
+  const [tick, setTick] = useState(0);
+  const reducedMotion = usePrefersReducedMotion();
+
+  useEffect(() => {
+    if (!active) {
+      setTick(0);
+      return;
+    }
+    if (reducedMotion) return;
+    const timer = setInterval(
+      () => setTick((previous) => previous + 1),
+      SELECTING_LABEL_INTERVAL_MS,
+    );
+    return () => clearInterval(timer);
+  }, [active, reducedMotion]);
+
+  return active ? selectingLabel(tick, reducedMotion) : null;
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReducedMotion(query.matches);
+    const onChange = (event: MediaQueryListEvent) =>
+      setReducedMotion(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  return reducedMotion;
+}
 
 function AutoRouterPage() {
   const { projectId } = useBbContext();
@@ -27,10 +73,20 @@ function AutoRouterPage() {
     | { kind: "selected"; result: RoutedThreadResult }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
+  const selectingText = useSelectingLabel(status.kind === "selecting");
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      <div className={AUTO_ROUTER_COMPOSE_LAYOUT_CLASS}>
+      <div
+        className={AUTO_ROUTER_COMPOSE_LAYOUT_CLASS}
+        style={
+          selectingText
+            ? ({
+                "--autorouter-picker-label": toCssContentString(selectingText),
+              } as CSSProperties)
+            : undefined
+        }
+      >
         <NewThreadComposer
           defaultProjectId={projectId ?? undefined}
           className="autorouter-composer"
@@ -55,10 +111,14 @@ function AutoRouterPage() {
           }}
         />
         <div className="min-h-6 text-sm" aria-live="polite">
+          {/*
+            While routing, the visible status lives in the composer's picker
+            button (see autorouter.css). The cycling dots would be read out on
+            every frame, so assistive tech gets the announcement once, without
+            them.
+          */}
           {status.kind === "selecting" ? (
-            <p className="mx-2 text-muted-foreground">
-              Selecting the proper agent…
-            </p>
+            <p className="sr-only">{`${SELECTING_LABEL_BASE}…`}</p>
           ) : null}
           {status.kind === "error" ? (
             <p className="mx-2 text-destructive">{status.message}</p>

@@ -1,3 +1,10 @@
+/*
+ * The composer's provider/model picker is owned by bb, so Auto Router restyles
+ * it from the outside: the real model name is hidden and the label is redrawn
+ * from `--autorouter-picker-label`. Idle that reads "Auto"; while a submission
+ * is being routed the page sets the property to the animated selecting text,
+ * so the status appears on the control whose value is being decided.
+ */
 .autorouter-composer
   button[aria-label^="Provider, model and reasoning"]
   > span[title]
@@ -8,12 +15,19 @@
 .autorouter-composer
   button[aria-label^="Provider, model and reasoning"]
   > span[title]::before {
-  content: "Auto";
+  content: var(--autorouter-picker-label, "Auto");
   color: var(--foreground);
+  /*
+   * The trigger is `w-fit max-w-full`, so the selecting text is far wider than
+   * the idle "Auto" and would spill out of a narrow composer. Truncate instead:
+   * the label degrades to an ellipsis rather than breaking the toolbar row.
+   */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.autorouter-composer
-  button[aria-label^="Provider, model and reasoning"]
-  > svg {
+.autorouter-composer button[aria-label^="Provider, model and reasoning"] > svg {
   display: none;
 }
