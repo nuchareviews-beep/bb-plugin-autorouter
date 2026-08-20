@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AutoModelCandidate, ReasoningLevel } from "./benchmarks.js";
 import {
+  classifierCandidate,
   isModelOverrideGrounded,
   leastClassifierPermissionMode,
   leastClassifierReasoning,
@@ -54,6 +55,50 @@ describe("difficulty decision", () => {
         ]),
       ),
     ).toBe("low");
+  });
+});
+
+describe("automatic decision agent", () => {
+  it("uses the least expensive benchmarked option with remaining quota", () => {
+    const selected = classifierCandidate(
+      [
+        candidate("acp-cursor", "composer-2.5", ["medium"]),
+        candidate("codex", "gpt-5.6-luna", ["low", "medium"]),
+        candidate("claude-code", "claude-sonnet-5", ["low"]),
+      ],
+      { decisionAgent: "automatic", customInstructions: "", frugality: 50 },
+      new Map([
+        ["acp-cursor", 1],
+        ["codex", 1],
+        ["claude-code", 1],
+      ]),
+    );
+
+    expect(selected).toMatchObject({
+      candidate: { providerId: "codex", model: { model: "gpt-5.6-luna" } },
+      reasoningLevel: "low",
+    });
+  });
+
+  it("uses the provider fallbacks when no scored option can launch", () => {
+    const selected = classifierCandidate(
+      [
+        candidate("acp-cursor", "composer-2.5", ["low"]),
+        candidate("codex", "gpt-5.6-luna", ["ultra"]),
+        candidate("claude-code", "claude-sonnet-5", ["ultra"]),
+      ],
+      { decisionAgent: "automatic", customInstructions: "", frugality: 50 },
+      new Map([
+        ["acp-cursor", 1],
+        ["codex", 1],
+        ["claude-code", 1],
+      ]),
+    );
+
+    expect(selected).toMatchObject({
+      candidate: { providerId: "acp-cursor", model: { model: "composer-2.5" } },
+      reasoningLevel: "low",
+    });
   });
 });
 

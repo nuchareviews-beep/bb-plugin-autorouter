@@ -373,14 +373,12 @@ function rankByCapabilityTarget(
   );
 }
 
-export function rankAutoModelOptions(args: {
+function scoredModelOptions(args: {
   candidates: AutoModelCandidate[];
-  difficulty: number;
-  frugality: number;
   quotaRemainingByProvider: ReadonlyMap<string, number>;
 }): AutoModelRankedOption[] {
   const supportedProviders = new Set(["codex", "claude-code", "acp-cursor"]);
-  const options = args.candidates.flatMap((candidate) => {
+  return args.candidates.flatMap((candidate) => {
     if (!supportedProviders.has(candidate.providerId)) return [];
     const family = benchmarkFamily(candidate.model.model);
     if (family === null) return [];
@@ -408,6 +406,35 @@ export function rankAutoModelOptions(args: {
       }),
     );
   });
+}
+
+/**
+ * Returns the cheapest currently launchable benchmarked option. This is kept
+ * separate from route ranking because the short classification turn should be
+ * inexpensive, while the routed thread is selected for task capability.
+ */
+export function lowestCostModelOption(args: {
+  candidates: AutoModelCandidate[];
+  quotaRemainingByProvider: ReadonlyMap<string, number>;
+}): AutoModelRankedOption | null {
+  return (
+    scoredModelOptions(args).sort(
+      (left, right) =>
+        left.costPerTask - right.costPerTask ||
+        left.providerId.localeCompare(right.providerId) ||
+        left.model.localeCompare(right.model) ||
+        left.reasoningLevel.localeCompare(right.reasoningLevel),
+    )[0] ?? null
+  );
+}
+
+export function rankAutoModelOptions(args: {
+  candidates: AutoModelCandidate[];
+  difficulty: number;
+  frugality: number;
+  quotaRemainingByProvider: ReadonlyMap<string, number>;
+}): AutoModelRankedOption[] {
+  const options = scoredModelOptions(args);
   const band = capabilityBand(args);
   const bounded = options.filter(
     (option) =>

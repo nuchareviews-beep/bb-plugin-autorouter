@@ -8,7 +8,6 @@ describe("Autorouter plugin", () => {
     await plugin(bb);
 
     expect(await harness.behavior.callRpc("getSettings", null)).toMatchObject({
-      enabled: true,
       frugality: 50,
       decisionAgent: "automatic",
     });

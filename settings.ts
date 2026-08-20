@@ -4,7 +4,6 @@ export const AUTOMATIC_DECISION_AGENT = "automatic";
 
 export const autorouterSettingsSchema = z
   .object({
-    enabled: z.boolean(),
     decisionAgent: z
       .string()
       .min(1)
@@ -24,13 +23,20 @@ export const autorouterSettingsPatchSchema = autorouterSettingsSchema.partial();
 export type AutorouterSettings = z.infer<typeof autorouterSettingsSchema>;
 
 export const defaultAutorouterSettings: AutorouterSettings = {
-  enabled: true,
   decisionAgent: AUTOMATIC_DECISION_AGENT,
   customInstructions: "",
   frugality: 50,
 };
 
 export function parseStoredSettings(value: unknown): AutorouterSettings {
-  const parsed = autorouterSettingsSchema.safeParse(value);
+  // `enabled` was removed in v0.3. Loading the plugin now determines whether
+  // routing is available, but retain the rest of existing users' settings.
+  const settings =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).filter(([key]) => key !== "enabled"),
+        )
+      : value;
+  const parsed = autorouterSettingsSchema.safeParse(settings);
   return parsed.success ? parsed.data : defaultAutorouterSettings;
 }

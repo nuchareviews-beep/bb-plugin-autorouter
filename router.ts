@@ -1,6 +1,7 @@
 import type { BbPluginApi, NewThreadRequest } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
+  lowestCostModelOption,
   rankAutoModelOptions,
   type AutoModelCandidate,
   type AutoModelRankedOption,
@@ -268,9 +269,8 @@ async function listProviderModels(
 
 async function loadCandidates(
   bb: BbPluginApi,
-  request: NewThreadRequest,
+  route: ReturnType<typeof discoveryEnvironment>,
 ): Promise<AutoModelCandidate[]> {
-  const route = discoveryEnvironment(request);
   const providers = await listProviders(bb, route);
   const providerById = new Map(
     providers.map((provider) => [provider.id, provider]),
@@ -309,9 +309,8 @@ async function loadCandidates(
 
 async function loadUsage(
   bb: BbPluginApi,
-  request: NewThreadRequest,
+  route: ReturnType<typeof discoveryEnvironment>,
 ): Promise<UsageResponse> {
-  const route = discoveryEnvironment(request);
   if (route.kind === "host") {
     return bb.sdk.system.usageLimits({ hostId: route.hostId });
   }
@@ -355,7 +354,7 @@ export function leastClassifierReasoning(
   );
 }
 
-function classifierCandidate(
+export function classifierCandidate(
   candidates: AutoModelCandidate[],
   settings: AutorouterSettings,
   quota: ReadonlyMap<string, number>,
@@ -370,24 +369,56 @@ function classifierCandidate(
         (candidate.model.model === model || candidate.model.id === model),
     );
   const configured = settings.decisionAgent.split("/", 2);
+  const cheapest = lowestCostModelOption({
+    candidates: usable,
+    quotaRemainingByProvider: quota,
+  });
+  if (settings.decisionAgent === AUTOMATIC_DECISION_AGENT) {
+    if (cheapest) {
+      const candidate = exact(cheapest.providerId, cheapest.model);
+      if (candidate) {
+        return { candidate, reasoningLevel: cheapest.reasoningLevel };
+      }
+    }
+    const fallback =
+      exact("acp-cursor", "composer-2.5") ??
+      exact("codex", "gpt-5.6-luna") ??
+      exact("claude-code", "claude-sonnet-5") ??
+      usable.find((candidate) =>
+        candidate.model.supportedReasoningEfforts.some(
+          (effort) => effort.reasoningEffort === "none",
+        ),
+      ) ??
+      usable[0];
+    return fallback
+      ? {
+          candidate: fallback,
+          reasoningLevel: leastClassifierReasoning(fallback),
+        }
+      : null;
+  }
+
   const selected =
-    settings.decisionAgent === AUTOMATIC_DECISION_AGENT
-      ? (exact("acp-cursor", "gpt-5.6-sol-medium") ??
-        exact("codex", "gpt-5.6-luna") ??
-        usable.find((candidate) =>
-          candidate.model.supportedReasoningEfforts.some(
-            (effort) => effort.reasoningEffort === "none",
-          ),
-        ) ??
-        usable[0])
-      : configured.length === 2
-        ? exact(configured[0] ?? "", configured[1] ?? "")
-        : undefined;
+    configured.length === 2
+      ? exact(configured[0] ?? "", configured[1] ?? "")
+      : undefined;
   if (!selected) return null;
   return {
     candidate: selected,
     reasoningLevel: leastClassifierReasoning(selected),
   };
+}
+
+export async function resolveDecisionAgentLabel(
+  bb: BbPluginApi,
+  settings: AutorouterSettings,
+): Promise<string> {
+  const route = { kind: "primary" } as const;
+  const candidates = await loadCandidates(bb, route);
+  const quota = quotaRemainingByProvider(await loadUsage(bb, route));
+  const classifier = classifierCandidate(candidates, settings, quota);
+  if (!classifier) return settings.decisionAgent;
+  return `${settings.decisionAgent} (${classifier.candidate.model.displayName})`;
 }
 
 // bb 0.39 exposes exactly three presets, ordered least to most privileged.
@@ -560,9 +591,9 @@ export async function resolveRoute(
   request: NewThreadRequest,
   settings: AutorouterSettings,
 ): Promise<ResolvedRoute> {
-  if (!settings.enabled) throw new Error("Autorouter is disabled");
-  const candidates = await loadCandidates(bb, request);
-  const usage = await loadUsage(bb, request);
+  const discoveryRoute = discoveryEnvironment(request);
+  const candidates = await loadCandidates(bb, discoveryRoute);
+  const usage = await loadUsage(bb, discoveryRoute);
   const quota = quotaRemainingByProvider(usage);
   const task = taskText(request.input);
   let decision: DifficultyDecision = {

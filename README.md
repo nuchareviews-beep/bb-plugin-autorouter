@@ -20,10 +20,12 @@ classification" and sends it your prompt text (truncated to 20,000 characters)
 plus any custom rating instructions you configured. Its only job is to return a
 0-100 difficulty score.
 
-- Provider choice: with the default `automatic` decision agent this is Cursor
-  `gpt-5.6-sol-medium`, else Codex `gpt-5.6-luna`, else the first usable model
-  with quota remaining. Pick a fixed classifier under **Extensions → Plugins →
-  Auto Router** if you want your prompts to go to one known vendor.
+- Provider choice: with the default `automatic` decision agent this is the
+  lowest-cost model-and-reasoning option from the bundled score table that can
+  launch with quota remaining. If none of those scored options can launch, the
+  fallback order is Cursor Composer 2.5, Codex GPT-5.6 Luna, then Anthropic
+  Sonnet 5. Pick a fixed classifier under **Extensions → Plugins → Auto Router**
+  if you want your prompts to go to one known vendor.
 - The classification thread is archived and stopped as soon as the score is
   read.
 
@@ -68,11 +70,9 @@ bb autorouter route --prompt "Fix the header spacing"
 ## Routing policy
 
 The classifier is instructed to return only compact JSON containing a 0–100
-difficulty score. `automatic` prefers a model with the lightest available
-reasoning. Cursor currently advertises `none` on individual model rows while
-its ACP launch contract accepts `low` as the minimum, so the extension
-reconciles to `low`. If classification fails, routing uses 50/100 and records a
-plugin warning.
+difficulty score. `automatic` uses the lowest-cost scored option with quota
+remaining, including its benchmarked reasoning level. If classification fails,
+routing uses 50/100 and records a plugin warning.
 
 At the frugality endpoints, the capability curves are anchored to:
 

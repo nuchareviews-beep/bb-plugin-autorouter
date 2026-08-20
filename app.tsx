@@ -130,6 +130,9 @@ function AutoRouterSettings() {
   const rpc = useRpc<typeof rpcContract>();
   const [settings, setSettings] = useState<AutorouterSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [decisionAgentLabel, setDecisionAgentLabel] = useState<string | null>(
+    null,
+  );
   const settingsRef = useRef<AutorouterSettings | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveVersionRef = useRef(0);
@@ -153,6 +156,14 @@ function AutoRouterSettings() {
 
   useEffect(load, []);
   useRealtime("settings-changed", load);
+
+  useEffect(() => {
+    if (!settings) return;
+    void rpc
+      .call("getDecisionAgentLabel", null)
+      .then(setDecisionAgentLabel)
+      .catch(() => setDecisionAgentLabel(settings.decisionAgent));
+  }, [rpc, settings?.decisionAgent]);
 
   useEffect(
     () => () => {
@@ -222,21 +233,6 @@ function AutoRouterSettings() {
 
   return (
     <div className="space-y-6">
-      <label className="flex items-start justify-between gap-4">
-        <span>
-          <span className="block text-sm font-medium">Enable Auto Router</span>
-          <span className="block text-xs text-muted-foreground">
-            Allow the extension page and CLI to create routed threads.
-          </span>
-        </span>
-        <input
-          type="checkbox"
-          className="mt-1 size-4 accent-primary"
-          checked={settings.enabled}
-          onChange={(event) => update({ enabled: event.target.checked })}
-        />
-      </label>
-
       <div className="space-y-2">
         <div>
           <label className="text-sm font-medium" htmlFor="autorouter-frugality">
@@ -287,8 +283,7 @@ function AutoRouterSettings() {
           onBlur={flush}
         />
         <p className="text-xs text-muted-foreground">
-          Automatic uses the lightest reasoning level the provider can actually
-          launch. Cursor currently reconciles its advertised none level to low.
+          Currently using {decisionAgentLabel ?? settings.decisionAgent}.
         </p>
       </div>
 
@@ -314,11 +309,6 @@ function AutoRouterSettings() {
           }
           onBlur={flush}
         />
-        <p className="text-xs text-muted-foreground">
-          These instructions may name a model override. The classifier cannot
-          invent one; the requested name must also be grounded in the prompt or
-          these instructions.
-        </p>
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -336,9 +326,6 @@ export default definePluginApp((app) => {
   });
   app.slots.settingsSection({
     id: "autorouter-settings",
-    title: "Routing policy",
-    description:
-      "Configure task classification and the cost-to-capability tradeoff.",
     component: AutoRouterSettings,
   });
 });

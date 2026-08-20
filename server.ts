@@ -4,7 +4,7 @@ import {
   type NewThreadRequest,
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { createRoutedThread } from "./router.js";
+import { createRoutedThread, resolveDecisionAgentLabel } from "./router.js";
 import {
   autorouterSettingsPatchSchema,
   autorouterSettingsSchema,
@@ -69,6 +69,10 @@ export const rpcContract = defineRpcContract({
     input: z.null(),
     output: autorouterSettingsSchema,
   },
+  getDecisionAgentLabel: {
+    input: z.null(),
+    output: z.string(),
+  },
   updateSettings: {
     input: autorouterSettingsPatchSchema,
     output: autorouterSettingsSchema,
@@ -79,16 +83,9 @@ export const rpcContract = defineRpcContract({
   },
 });
 
-function parseBoolean(value: string): boolean {
-  if (value === "true") return true;
-  if (value === "false") return false;
-  throw new Error("Expected true or false");
-}
-
 function formatSettings(settings: AutorouterSettings, json: boolean): string {
   if (json) return `${JSON.stringify(settings)}\n`;
   return [
-    `Enabled: ${settings.enabled ? "yes" : "no"}`,
     `Frugality: ${settings.frugality}/100 ($ -> $$$)`,
     `Decision agent: ${settings.decisionAgent}`,
     `Custom instructions: ${settings.customInstructions || "(none)"}`,
@@ -119,6 +116,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     getSettings: readSettings,
+    getDecisionAgentLabel: async () =>
+      resolveDecisionAgentLabel(bb, await readSettings()),
     updateSettings,
     createThread: async ({ request }) =>
       createRoutedThread(bb, request, await readSettings()),
@@ -137,7 +136,7 @@ export default async function plugin(bb: BbPluginApi) {
         name: "config",
         summary: "Update Autorouter settings",
         usage:
-          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--instructions text] [--json]",
+          "bb autorouter config [--frugality 0-100] [--decision-agent automatic|provider/model] [--instructions text] [--json]",
       },
       {
         name: "route",
@@ -170,8 +169,7 @@ export default async function plugin(bb: BbPluginApi) {
                 `Missing value for ${flag ?? "configuration flag"}`,
               );
             }
-            if (flag === "--enabled") patch.enabled = parseBoolean(value);
-            else if (flag === "--frugality") patch.frugality = Number(value);
+            if (flag === "--frugality") patch.frugality = Number(value);
             else if (flag === "--decision-agent") patch.decisionAgent = value;
             else if (flag === "--instructions")
               patch.customInstructions = value;

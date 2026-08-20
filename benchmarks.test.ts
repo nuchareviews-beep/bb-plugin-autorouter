@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  lowestCostModelOption,
   rankAutoModelOptions,
   type AutoModelCandidate,
   type ReasoningLevel,
@@ -135,5 +136,44 @@ describe("rankAutoModelOptions", () => {
         quotaRemainingByProvider: new Map([["codex", 1]]),
       }),
     ).toEqual([]);
+  });
+});
+
+describe("lowestCostModelOption", () => {
+  it("chooses the least expensive scored option with quota", () => {
+    expect(
+      lowestCostModelOption({
+        candidates: [
+          candidate("acp-cursor", "composer-2.5", ["medium"]),
+          candidate("codex", "gpt-5.6-luna", ["low", "medium"]),
+          candidate("claude-code", "claude-sonnet-5", ["low"]),
+        ],
+        quotaRemainingByProvider: new Map([
+          ["acp-cursor", 1],
+          ["codex", 1],
+          ["claude-code", 1],
+        ]),
+      }),
+    ).toMatchObject({
+      providerId: "codex",
+      model: "gpt-5.6-luna",
+      reasoningLevel: "low",
+      costPerTask: 0.16,
+    });
+  });
+
+  it("excludes providers without remaining quota", () => {
+    expect(
+      lowestCostModelOption({
+        candidates: [
+          candidate("acp-cursor", "composer-2.5", ["medium"]),
+          candidate("codex", "gpt-5.6-luna", ["low"]),
+        ],
+        quotaRemainingByProvider: new Map([
+          ["acp-cursor", 1],
+          ["codex", 0],
+        ]),
+      }),
+    ).toMatchObject({ providerId: "acp-cursor", model: "composer-2.5" });
   });
 });
