@@ -11,6 +11,37 @@ choosing a concrete provider, model, and reasoning level from:
 No third-party benchmark API is called at runtime. Grok 4.5's published scores
 are reduced by 10% as part of the local policy.
 
+## What happens to your prompt
+
+**Every submission first runs a short hidden classification turn on one of your
+installed providers, which may not be the provider the thread ends up on.**
+Before routing, Auto Router spawns a hidden thread titled "Autorouter
+classification" and sends it your prompt text (truncated to 20,000 characters)
+plus any custom rating instructions you configured. Its only job is to return a
+0-100 difficulty score.
+
+- Provider choice: with the default `automatic` decision agent this is Cursor
+  `gpt-5.6-sol-medium`, else Codex `gpt-5.6-luna`, else the first usable model
+  with quota remaining. Pick a fixed classifier under **Extensions → Plugins →
+  Auto Router** if you want your prompts to go to one known vendor.
+- The classification thread is archived and stopped as soon as the score is
+  read.
+
+### Residual risk
+
+The classifier is a full coding agent, not a sandboxed text endpoint. It is
+instructed not to solve, explain, or act on the task, but prompt text is
+untrusted input and a crafted task could try to make it take actions. Auto
+Router bounds this two ways:
+
+- It always runs the classifier in a `project-default` environment, never the
+  environment or worktree the routed thread is headed for, so it cannot touch
+  the checkout you are working in.
+- It requests the least-privileged permission preset the provider advertises.
+  bb 0.39 has no read-only preset available to plugins, so that floor is
+  `accept-edits` — a determined injection could still edit files inside the
+  throwaway classification workspace.
+
 ## Install
 
 ```sh
@@ -60,6 +91,14 @@ The classifier may return a model override only when the user prompt requests
 that model or custom instructions explicitly route the matching task to it.
 The extension independently checks that the model exists and its name is
 grounded in one of those two sources before honoring the override.
+
+## Supported providers
+
+The provider, model, and CursorBench snapshot tables are compiled into the
+extension (`router.ts`, `benchmarks.ts`) and cover Codex, Claude Code, and
+Cursor as of v0.2.0. Models outside that table are still routable as fallbacks
+but do not get a capability or cost score, so the table needs a new release
+whenever a provider ships new models.
 
 ## Current bb extension boundary
 

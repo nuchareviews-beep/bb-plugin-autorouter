@@ -390,16 +390,31 @@ function classifierCandidate(
   };
 }
 
-function classifierEnvironment(
-  environment: NewThreadRequest["environment"],
-): NewThreadRequest["environment"] {
-  if (
-    environment.type === "host" &&
-    environment.workspace.type === "managed-worktree"
-  ) {
-    return { type: "project-default" };
-  }
-  return environment;
+// bb 0.39 exposes exactly three presets, ordered least to most privileged.
+// There is no read-only preset a plugin can request, so `accept-edits` is the
+// floor; picking it explicitly (rather than the provider's first advertised
+// mode) keeps the classifier off `auto` and `full`.
+const permissionModeOrder = [
+  "accept-edits",
+  "auto",
+  "full",
+] as const satisfies readonly NewThreadRequest["permissionMode"][];
+
+export function leastClassifierPermissionMode(
+  supported: NewThreadRequest["permissionMode"][],
+): NewThreadRequest["permissionMode"] {
+  const available = new Set(supported);
+  return (
+    permissionModeOrder.find((mode) => available.has(mode)) ?? "accept-edits"
+  );
+}
+
+// The classifier reads untrusted prompt text, so it never runs in the
+// environment the routed thread is headed for. `project-default` keeps it out
+// of the user's own checkout and out of any environment they asked to reuse,
+// which bounds a prompt-injected classification turn to a throwaway workspace.
+function classifierEnvironment(): NewThreadRequest["environment"] {
+  return { type: "project-default" };
 }
 
 async function classifyDifficulty(
@@ -420,14 +435,12 @@ async function classifyDifficulty(
   if (!classifier) {
     throw new Error("No configured difficulty agent is available");
   }
-  const permissionMode = classifier.candidate.permissionModes.includes(
-    "accept-edits",
-  )
-    ? "accept-edits"
-    : (classifier.candidate.permissionModes[0] ?? "accept-edits");
+  const permissionMode = leastClassifierPermissionMode(
+    classifier.candidate.permissionModes,
+  );
   const worker = await bb.sdk.threads.spawn({
     projectId: args.request.projectId,
-    environment: classifierEnvironment(args.request.environment),
+    environment: classifierEnvironment(),
     input: [
       {
         type: "text",

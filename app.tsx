@@ -273,7 +273,7 @@ export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "autorouter",
     title: "New autorouter thread",
-    icon: "Route",
+    icon: "Workflow",
     path: "autorouter",
     component: AutoRouterPage,
   });

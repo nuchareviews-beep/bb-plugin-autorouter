@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-autorouter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Difficulty-, quota-, and cost-aware model routing for bb threads",
   "scripts": {
@@ -16,7 +16,7 @@
     "name": "Autorouter",
     "description": "Route new threads by task difficulty, live provider quota, and benchmark cost.",
     "branding": {
-      "icon": "Route"
+      "icon": "Workflow"
     },
     "server": "./server.ts",
     "app": "./app.tsx"

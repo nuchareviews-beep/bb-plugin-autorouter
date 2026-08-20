@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AutoModelCandidate, ReasoningLevel } from "./benchmarks.js";
 import {
   isModelOverrideGrounded,
+  leastClassifierPermissionMode,
   leastClassifierReasoning,
   matchModelOverride,
   parseDifficultyDecision,
@@ -111,5 +112,21 @@ describe("provider quota", () => {
     expect(remaining.get("codex")).toBe(0);
     expect(remaining.get("claude-code")).toBe(0);
     expect(remaining.get("acp-cursor")).toBe(0.75);
+  });
+});
+
+describe("leastClassifierPermissionMode", () => {
+  it("prefers accept-edits over the more permissive presets", () => {
+    expect(leastClassifierPermissionMode(["full", "auto", "accept-edits"])).toBe(
+      "accept-edits",
+    );
+  });
+
+  it("falls back to auto before full when accept-edits is unsupported", () => {
+    expect(leastClassifierPermissionMode(["full", "auto"])).toBe("auto");
+  });
+
+  it("uses accept-edits when a provider advertises nothing", () => {
+    expect(leastClassifierPermissionMode([])).toBe("accept-edits");
   });
 });
