@@ -97,9 +97,6 @@ function AutoRouterPage() {
             try {
               const result = await rpc.call("createThread", { request });
               setStatus({ kind: "selected", result });
-              toast.success(
-                `Difficulty ${result.difficulty}/100 · ${result.providerId}/${result.model} (${result.reasoningLevel})`,
-              );
               navigate.toThread(result.threadId);
             } catch (error) {
               const message =
