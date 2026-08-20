@@ -1,0 +1,19 @@
+.autorouter-composer
+  button[aria-label^="Provider, model and reasoning"]
+  > span[title]
+  > * {
+  display: none;
+}
+
+.autorouter-composer
+  button[aria-label^="Provider, model and reasoning"]
+  > span[title]::before {
+  content: "Auto";
+  color: var(--foreground);
+}
+
+.autorouter-composer
+  button[aria-label^="Provider, model and reasoning"]
+  > svg {
+  display: none;
+}
