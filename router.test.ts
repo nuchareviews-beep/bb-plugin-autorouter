@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { NewThreadRequest } from "@get-bb/plugin-sdk";
+import { rankAutoModelOptions } from "./benchmarks.js";
 import type { AutoModelCandidate, ReasoningLevel } from "./benchmarks.js";
 import {
+  fallbackSelection,
   isModelOverrideGrounded,
   leastClassifierPermissionMode,
   leastClassifierReasoning,
@@ -62,6 +65,52 @@ describe("routable providers", () => {
   it("includes the local agy-backed Antigravity provider without broadening to OmniRoute", () => {
     expect(isRoutableProvider("antigravity")).toBe(true);
     expect(isRoutableProvider("omniroute")).toBe(false);
+  });
+
+  // Regression test: router.ts and benchmarks.ts each used to hardcode their
+  // own separate provider allowlist. Adding Antigravity to router.ts's copy
+  // (the one isRoutableProvider reads) left it eligible for thread creation
+  // but silently excluded from rankAutoModelOptions's *own* copy in
+  // benchmarks.ts, so it was never actually selected outside total
+  // benchmarked-provider exhaustion -- confirmed live against a running bb
+  // instance (bb autorouter route), not just inferred from reading the code.
+  // Both files now read the same ROUTABLE_PROVIDER_IDS from benchmarks.ts.
+  it("is honored identically by rankAutoModelOptions, not just candidate discovery", () => {
+    const antigravityOnly = [
+      candidate("antigravity", "gemini-3.7-flash-high", ["medium"]),
+    ];
+    expect(
+      rankAutoModelOptions({
+        candidates: antigravityOnly,
+        difficulty: 50,
+        frugality: 50,
+        quotaRemainingByProvider: new Map([["antigravity", 1]]),
+      }),
+    ).toEqual([]); // no CursorBench entry exists for it -- correctly unscored, not fabricated
+  });
+
+  it("still gets a real routed thread via fallbackSelection when it's the only eligible candidate", () => {
+    // This is the actual condition under which Antigravity gets chosen in
+    // practice: every benchmarked provider (Codex, Claude Code, Cursor) is
+    // unavailable or quota-exhausted, so rankAutoModelOptions returns no
+    // ranked option and resolveRoute falls through to fallbackSelection.
+    const request = {
+      providerId: "codex",
+      model: "gpt-5.6-sol",
+      permissionMode: "accept-edits",
+    } as unknown as NewThreadRequest;
+    const route = fallbackSelection(
+      [candidate("antigravity", "gemini-3.7-flash-high", ["medium"])],
+      request,
+      50,
+      50,
+      false,
+    );
+    expect(route).toMatchObject({
+      providerId: "antigravity",
+      model: "gemini-3.7-flash-high",
+      benchmarkScore: null,
+    });
   });
 });
 

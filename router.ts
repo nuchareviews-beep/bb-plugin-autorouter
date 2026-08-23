@@ -1,6 +1,7 @@
 import type { BbPluginApi, NewThreadRequest } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
+  isRoutableProvider,
   rankAutoModelOptions,
   type AutoModelCandidate,
   type AutoModelRankedOption,
@@ -15,21 +16,7 @@ const MAX_TASK_TEXT_LENGTH = 20_000;
 const DEFAULT_DIFFICULTY = 50;
 const CLASSIFIER_TIMEOUT_MS = 60_000;
 
-// These providers can create ordinary BB threads from this plugin. Keep this
-// list deliberately narrow: Antigravity is the local agy-backed provider, and
-// its model catalog is discovered live like the existing native providers.
-// OmniRoute is intentionally not an Autorouter target; it is reserved for
-// delegated subagent work by this project's routing policy.
-const ROUTABLE_PROVIDER_IDS = new Set([
-  "codex",
-  "claude-code",
-  "acp-cursor",
-  "antigravity",
-]);
-
-export function isRoutableProvider(providerId: string) {
-  return ROUTABLE_PROVIDER_IDS.has(providerId);
-}
+export { isRoutableProvider };
 
 const difficultyDecisionSchema = z
   .object({
@@ -507,7 +494,7 @@ function safePermissionMode(
   return supported[0] ?? "accept-edits";
 }
 
-function fallbackSelection(
+export function fallbackSelection(
   candidates: AutoModelCandidate[],
   request: NewThreadRequest,
   difficulty: number,
