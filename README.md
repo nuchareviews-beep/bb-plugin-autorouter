@@ -94,6 +94,11 @@ grounded in one of those two sources before honoring the override.
 
 ## Supported providers
 
+Autorouter discovers available Codex, Claude Code, Cursor, and Antigravity
+(`agy`) models from BB at route time. OmniRoute remains deliberately outside
+this list: it is intended for delegated subagent work rather than interactive
+Autorouter threads.
+
 The provider, model, and CursorBench snapshot tables are compiled into the
 extension (`router.ts`, `benchmarks.ts`) and cover Codex, Claude Code, and
 Cursor as of v0.2.0. Models outside that table are still routable as fallbacks

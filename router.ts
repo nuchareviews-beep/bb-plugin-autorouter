@@ -15,6 +15,22 @@ const MAX_TASK_TEXT_LENGTH = 20_000;
 const DEFAULT_DIFFICULTY = 50;
 const CLASSIFIER_TIMEOUT_MS = 60_000;
 
+// These providers can create ordinary BB threads from this plugin. Keep this
+// list deliberately narrow: Antigravity is the local agy-backed provider, and
+// its model catalog is discovered live like the existing native providers.
+// OmniRoute is intentionally not an Autorouter target; it is reserved for
+// delegated subagent work by this project's routing policy.
+const ROUTABLE_PROVIDER_IDS = new Set([
+  "codex",
+  "claude-code",
+  "acp-cursor",
+  "antigravity",
+]);
+
+export function isRoutableProvider(providerId: string) {
+  return ROUTABLE_PROVIDER_IDS.has(providerId);
+}
+
 const difficultyDecisionSchema = z
   .object({
     difficulty: z.number().int().min(0).max(100),
@@ -278,7 +294,7 @@ async function loadCandidates(
   const supported = providers.filter(
     (provider) =>
       provider.available &&
-      new Set(["codex", "claude-code", "acp-cursor"]).has(provider.id),
+      isRoutableProvider(provider.id),
   );
   const results = await Promise.all(
     supported.map(async (provider) => ({

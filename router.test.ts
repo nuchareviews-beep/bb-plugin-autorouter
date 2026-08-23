@@ -7,6 +7,7 @@ import {
   matchModelOverride,
   parseDifficultyDecision,
   quotaRemainingByProvider,
+  isRoutableProvider,
 } from "./router.js";
 
 function candidate(
@@ -54,6 +55,13 @@ describe("difficulty decision", () => {
         ]),
       ),
     ).toBe("low");
+  });
+});
+
+describe("routable providers", () => {
+  it("includes the local agy-backed Antigravity provider without broadening to OmniRoute", () => {
+    expect(isRoutableProvider("antigravity")).toBe(true);
+    expect(isRoutableProvider("omniroute")).toBe(false);
   });
 });
 
