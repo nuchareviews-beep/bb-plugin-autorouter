@@ -105,6 +105,20 @@ Cursor as of v0.2.0. Models outside that table are still routable as fallbacks
 but do not get a capability or cost score, so the table needs a new release
 whenever a provider ships new models.
 
+### Antigravity priority for simple tasks
+
+Antigravity has no CursorBench entry, so under normal benchmark-ranked routing
+it is only ever chosen when Codex, Claude Code, and Cursor are all
+simultaneously unavailable or quota-exhausted — a narrow, mostly-last-resort
+condition.
+
+Below difficulty 25/100, Autorouter skips benchmark ranking entirely and uses
+a fixed priority instead: **Antigravity → Codex → Claude Code** (Cursor is not
+part of this list; it keeps its normal ranked path at every difficulty).
+Simple tasks don't need a capability-matched model chosen from a curve built
+for harder work — an explicit model override (user-requested, or from custom
+instructions) still takes priority over this and applies before it.
+
 ## Current bb extension boundary
 
 bb 0.39 plugins cannot intercept the native root New Thread submit or insert
