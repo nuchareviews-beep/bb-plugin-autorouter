@@ -534,6 +534,40 @@ export function fallbackSelection(
   };
 }
 
+/**
+ * Below this difficulty, skip CursorBench-driven ranking entirely and use a
+ * fixed provider priority instead: Antigravity (local `agy`, no per-token
+ * billing) first, then Codex, then Claude Code. Simple tasks don't need a
+ * capability-matched model — they need the cheapest thing that can do them,
+ * and a benchmark curve built for harder work is the wrong tool to pick that.
+ * Cursor is deliberately not in this priority list; it keeps its normal
+ * benchmark-ranked path at every difficulty.
+ */
+const SIMPLE_TASK_DIFFICULTY_MAX = 25;
+const SIMPLE_TASK_PROVIDER_PRIORITY = ["antigravity", "codex", "claude-code"];
+
+export function simpleTaskSelection(
+  candidates: AutoModelCandidate[],
+  quota: ReadonlyMap<string, number>,
+  request: NewThreadRequest,
+  difficulty: number,
+  frugality: number,
+  overrideApplied: boolean,
+): ResolvedRoute | null {
+  if (difficulty > SIMPLE_TASK_DIFFICULTY_MAX) return null;
+  for (const providerId of SIMPLE_TASK_PROVIDER_PRIORITY) {
+    const eligible = candidates.filter(
+      (candidate) =>
+        candidate.providerId === providerId &&
+        (quota.get(providerId) ?? 1) > 0,
+    );
+    if (eligible.length > 0) {
+      return fallbackSelection(eligible, request, difficulty, frugality, overrideApplied);
+    }
+  }
+  return null;
+}
+
 function rankedSelection(
   selected: AutoModelRankedOption,
   request: NewThreadRequest,
@@ -611,6 +645,17 @@ export async function resolveRoute(
   const selectionCandidates =
     eligibleOverride.length > 0 ? eligibleOverride : quotaEligible;
   const overrideApplied = eligibleOverride.length > 0;
+  if (!overrideApplied) {
+    const simpleTask = simpleTaskSelection(
+      quotaEligible,
+      quota,
+      request,
+      decision.difficulty,
+      settings.frugality,
+      overrideApplied,
+    );
+    if (simpleTask) return simpleTask;
+  }
   const ranked = rankAutoModelOptions({
     candidates: selectionCandidates,
     difficulty: decision.difficulty,

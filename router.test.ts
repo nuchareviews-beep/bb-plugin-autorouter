@@ -11,6 +11,7 @@ import {
   parseDifficultyDecision,
   quotaRemainingByProvider,
   isRoutableProvider,
+  simpleTaskSelection,
 } from "./router.js";
 
 function candidate(
@@ -185,5 +186,71 @@ describe("leastClassifierPermissionMode", () => {
 
   it("uses accept-edits when a provider advertises nothing", () => {
     expect(leastClassifierPermissionMode([])).toBe("accept-edits");
+  });
+});
+
+describe("simple-task provider priority", () => {
+  const request = {
+    providerId: "codex",
+    model: "gpt-5.6-sol",
+    permissionMode: "accept-edits",
+  } as unknown as NewThreadRequest;
+  const allThree = [
+    candidate("antigravity", "gemini-3.7-flash-high", ["medium"]),
+    candidate("codex", "gpt-5.6-luna", ["low", "medium"]),
+    candidate("claude-code", "claude-fable-5", ["low", "medium"]),
+  ];
+  const fullQuota = new Map([
+    ["antigravity", 1],
+    ["codex", 1],
+    ["claude-code", 1],
+  ]);
+
+  it("prefers Antigravity for a simple task when it's available", () => {
+    expect(
+      simpleTaskSelection(allThree, fullQuota, request, 10, 50, false),
+    ).toMatchObject({ providerId: "antigravity" });
+  });
+
+  it("falls back to Codex when Antigravity has no candidates", () => {
+    const withoutAntigravity = allThree.filter(
+      (candidate) => candidate.providerId !== "antigravity",
+    );
+    expect(
+      simpleTaskSelection(withoutAntigravity, fullQuota, request, 10, 50, false),
+    ).toMatchObject({ providerId: "codex" });
+  });
+
+  it("falls back to Claude Code when Antigravity and Codex are both unavailable", () => {
+    const onlyClaude = allThree.filter(
+      (candidate) => candidate.providerId === "claude-code",
+    );
+    expect(
+      simpleTaskSelection(onlyClaude, fullQuota, request, 10, 50, false),
+    ).toMatchObject({ providerId: "claude-code" });
+  });
+
+  it("respects quota exhaustion, not just candidate presence", () => {
+    const antigravityOutOfQuota = new Map([
+      ["antigravity", 0],
+      ["codex", 1],
+      ["claude-code", 1],
+    ]);
+    expect(
+      simpleTaskSelection(allThree, antigravityOutOfQuota, request, 10, 50, false),
+    ).toMatchObject({ providerId: "codex" });
+  });
+
+  it("does not apply above the simple-task difficulty threshold", () => {
+    expect(
+      simpleTaskSelection(allThree, fullQuota, request, 30, 50, false),
+    ).toBeNull();
+  });
+
+  it("returns null (defer to benchmark ranking) when none of the three are eligible", () => {
+    const onlyCursor = [candidate("acp-cursor", "composer-2.5", ["medium"])];
+    expect(
+      simpleTaskSelection(onlyCursor, fullQuota, request, 10, 50, false),
+    ).toBeNull();
   });
 });
