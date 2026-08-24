@@ -11,7 +11,7 @@ import {
   parseDifficultyDecision,
   quotaRemainingByProvider,
   isRoutableProvider,
-  simpleTaskSelection,
+  difficultyBandSelection,
 } from "./router.js";
 
 function candidate(
@@ -189,7 +189,7 @@ describe("leastClassifierPermissionMode", () => {
   });
 });
 
-describe("simple-task provider priority", () => {
+describe("per-difficulty band selection", () => {
   const request = {
     providerId: "codex",
     model: "gpt-5.6-sol",
@@ -205,10 +205,15 @@ describe("simple-task provider priority", () => {
     ["codex", 1],
     ["claude-code", 1],
   ]);
+  // Reproduces the plugin's previous hardcoded simple-task band, now as
+  // plain settings data instead of constants baked into router.ts.
+  const simpleTaskBand = [
+    { maxDifficulty: 25, fallbackChain: ["antigravity", "codex", "claude-code"] },
+  ];
 
   it("prefers Antigravity for a simple task when it's available", () => {
     expect(
-      simpleTaskSelection(allThree, fullQuota, request, 10, 50, false),
+      difficultyBandSelection(allThree, fullQuota, request, 10, 50, false, simpleTaskBand),
     ).toMatchObject({ providerId: "antigravity" });
   });
 
@@ -217,7 +222,15 @@ describe("simple-task provider priority", () => {
       (candidate) => candidate.providerId !== "antigravity",
     );
     expect(
-      simpleTaskSelection(withoutAntigravity, fullQuota, request, 10, 50, false),
+      difficultyBandSelection(
+        withoutAntigravity,
+        fullQuota,
+        request,
+        10,
+        50,
+        false,
+        simpleTaskBand,
+      ),
     ).toMatchObject({ providerId: "codex" });
   });
 
@@ -226,7 +239,7 @@ describe("simple-task provider priority", () => {
       (candidate) => candidate.providerId === "claude-code",
     );
     expect(
-      simpleTaskSelection(onlyClaude, fullQuota, request, 10, 50, false),
+      difficultyBandSelection(onlyClaude, fullQuota, request, 10, 50, false, simpleTaskBand),
     ).toMatchObject({ providerId: "claude-code" });
   });
 
@@ -237,20 +250,62 @@ describe("simple-task provider priority", () => {
       ["claude-code", 1],
     ]);
     expect(
-      simpleTaskSelection(allThree, antigravityOutOfQuota, request, 10, 50, false),
+      difficultyBandSelection(
+        allThree,
+        antigravityOutOfQuota,
+        request,
+        10,
+        50,
+        false,
+        simpleTaskBand,
+      ),
     ).toMatchObject({ providerId: "codex" });
   });
 
-  it("does not apply above the simple-task difficulty threshold", () => {
+  it("does not apply above the band's difficulty threshold", () => {
     expect(
-      simpleTaskSelection(allThree, fullQuota, request, 30, 50, false),
+      difficultyBandSelection(allThree, fullQuota, request, 30, 50, false, simpleTaskBand),
     ).toBeNull();
   });
 
-  it("returns null (defer to benchmark ranking) when none of the three are eligible", () => {
+  it("returns null (defer to benchmark ranking) when none of the chain is eligible", () => {
     const onlyCursor = [candidate("acp-cursor", "composer-2.5", ["medium"])];
     expect(
-      simpleTaskSelection(onlyCursor, fullQuota, request, 10, 50, false),
+      difficultyBandSelection(onlyCursor, fullQuota, request, 10, 50, false, simpleTaskBand),
     ).toBeNull();
+  });
+
+  it("returns null when no band covers the task's difficulty", () => {
+    expect(
+      difficultyBandSelection(allThree, fullQuota, request, 10, 50, false, []),
+    ).toBeNull();
+  });
+
+  it("picks the lowest-threshold band that still covers the difficulty, checked ascending", () => {
+    const bands = [
+      { maxDifficulty: 80, fallbackChain: ["claude-code"] },
+      { maxDifficulty: 20, fallbackChain: ["antigravity"] },
+    ];
+    expect(
+      difficultyBandSelection(allThree, fullQuota, request, 15, 50, false, bands),
+    ).toMatchObject({ providerId: "antigravity" });
+  });
+
+  it("pins an exact provider/model chain entry, not just a bare provider", () => {
+    const bands = [{ maxDifficulty: 25, fallbackChain: ["codex/gpt-5.6-luna"] }];
+    const withExtraCodexModel = [
+      ...allThree,
+      candidate("codex", "gpt-5.6-sol", ["medium"]),
+    ];
+    const result = difficultyBandSelection(
+      withExtraCodexModel,
+      fullQuota,
+      request,
+      10,
+      50,
+      false,
+      bands,
+    );
+    expect(result).toMatchObject({ providerId: "codex", model: "gpt-5.6-luna" });
   });
 });

@@ -10,6 +10,7 @@ import {
 import {
   AUTOMATIC_DECISION_AGENT,
   type AutorouterSettings,
+  type DifficultyBand,
 } from "./settings.js";
 
 const MAX_TASK_TEXT_LENGTH = 20_000;
@@ -546,32 +547,47 @@ export function fallbackSelection(
 }
 
 /**
- * Below this difficulty, skip CursorBench-driven ranking entirely and use a
- * fixed provider priority instead: Antigravity (local `agy`, no per-token
- * billing) first, then Codex, then Claude Code. Simple tasks don't need a
- * capability-matched model — they need the cheapest thing that can do them,
- * and a benchmark curve built for harder work is the wrong tool to pick that.
- * Cursor is deliberately not in this priority list; it keeps its normal
- * benchmark-ranked path at every difficulty.
+ * Per-difficulty model selection: `settings.difficultyBands`, checked
+ * low-to-high by `maxDifficulty`. The first band covering the task's
+ * difficulty score routes through that band's own fallback chain instead of
+ * the normal CursorBench-driven ranking below — skipping capability-matched
+ * ranking entirely for difficulty ranges where the user has said "just use
+ * this" (e.g. simple tasks don't need a benchmark curve built for harder
+ * work; they need the cheapest thing that can do them). Bands, their
+ * thresholds, and their chains are a plain user setting — there is no
+ * hardcoded difficulty cutoff or provider priority left in this file.
  */
-const SIMPLE_TASK_DIFFICULTY_MAX = 25;
-const SIMPLE_TASK_PROVIDER_PRIORITY = ["antigravity", "codex", "claude-code"];
+function candidatesForChainEntry(
+  candidates: AutoModelCandidate[],
+  quota: ReadonlyMap<string, number>,
+  entry: string,
+): AutoModelCandidate[] {
+  const [providerId, model] = entry.split("/", 2);
+  return candidates.filter(
+    (candidate) =>
+      candidate.providerId === providerId &&
+      (quota.get(candidate.providerId) ?? 1) > 0 &&
+      (model === undefined ||
+        candidate.model.model === model ||
+        candidate.model.id === model),
+  );
+}
 
-export function simpleTaskSelection(
+export function difficultyBandSelection(
   candidates: AutoModelCandidate[],
   quota: ReadonlyMap<string, number>,
   request: NewThreadRequest,
   difficulty: number,
   frugality: number,
   overrideApplied: boolean,
+  bands: readonly DifficultyBand[],
 ): ResolvedRoute | null {
-  if (difficulty > SIMPLE_TASK_DIFFICULTY_MAX) return null;
-  for (const providerId of SIMPLE_TASK_PROVIDER_PRIORITY) {
-    const eligible = candidates.filter(
-      (candidate) =>
-        candidate.providerId === providerId &&
-        (quota.get(providerId) ?? 1) > 0,
-    );
+  const band = [...bands]
+    .sort((a, b) => a.maxDifficulty - b.maxDifficulty)
+    .find((candidate) => difficulty <= candidate.maxDifficulty);
+  if (!band) return null;
+  for (const entry of band.fallbackChain) {
+    const eligible = candidatesForChainEntry(candidates, quota, entry);
     if (eligible.length > 0) {
       return fallbackSelection(eligible, request, difficulty, frugality, overrideApplied);
     }
@@ -657,15 +673,16 @@ export async function resolveRoute(
     eligibleOverride.length > 0 ? eligibleOverride : quotaEligible;
   const overrideApplied = eligibleOverride.length > 0;
   if (!overrideApplied) {
-    const simpleTask = simpleTaskSelection(
+    const banded = difficultyBandSelection(
       quotaEligible,
       quota,
       request,
       decision.difficulty,
       settings.frugality,
       overrideApplied,
+      settings.difficultyBands,
     );
-    if (simpleTask) return simpleTask;
+    if (banded) return banded;
   }
   const ranked = rankAutoModelOptions({
     candidates: selectionCandidates,

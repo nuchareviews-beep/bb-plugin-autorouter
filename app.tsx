@@ -10,7 +10,7 @@ import {
 import { toast } from "sonner";
 import type { ModelCatalog, rpcContract } from "./server";
 import type { RoutedThreadResult } from "./router";
-import type { AutorouterSettings } from "./settings";
+import type { AutorouterSettings, DifficultyBand } from "./settings";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -147,6 +147,215 @@ function AutoRouterPage() {
 interface CatalogState {
   status: "loading" | "ready" | "failed";
   catalog: ModelCatalog | null;
+}
+
+type UpdateSettings = (
+  patch: Partial<AutorouterSettings>,
+  options?: { debounceMs?: number },
+) => void;
+
+/**
+ * Per-difficulty model selection: an ordered list of difficulty bands
+ * (`maxDifficulty` + its own fallback chain), checked low-to-high. Mirrors
+ * the Decision agent section's fallback-order editor, just scoped per band
+ * instead of to the classifier — same list/reorder/remove pattern, plus a
+ * per-band model picker and add/remove band controls.
+ */
+function DifficultyBandsSection({
+  settings,
+  update,
+  picker,
+}: {
+  settings: AutorouterSettings;
+  update: UpdateSettings;
+  picker: CatalogState;
+}) {
+  function updateBand(index: number, patch: Partial<DifficultyBand>) {
+    update({
+      difficultyBands: settings.difficultyBands.map((band, i) =>
+        i === index ? { ...band, ...patch } : band,
+      ),
+    });
+  }
+
+  function removeBand(index: number) {
+    update({
+      difficultyBands: settings.difficultyBands.filter((_, i) => i !== index),
+    });
+  }
+
+  function addBand() {
+    update({
+      difficultyBands: [
+        ...settings.difficultyBands,
+        { maxDifficulty: 50, fallbackChain: [] },
+      ],
+    });
+  }
+
+  const sortedForDisplay = [...settings.difficultyBands]
+    .map((band, index) => ({ band, index }))
+    .sort((a, b) => a.band.maxDifficulty - b.band.maxDifficulty);
+
+  return (
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Per-difficulty model selection</label>
+      <p className="text-xs text-muted-foreground">
+        Route tasks under a difficulty threshold straight through a fixed
+        fallback chain instead of the normal benchmark-ranked selection.
+        Checked low to high — the first band that covers a task's difficulty
+        score wins. Empty by default beyond whatever bands you add here;
+        there is no hardcoded difficulty cutoff.
+      </p>
+      {sortedForDisplay.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">
+          No bands configured — every task uses benchmark-ranked selection.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {sortedForDisplay.map(({ band, index }) => (
+            <div key={index} className="space-y-2 rounded-md border border-input p-2">
+              <div className="flex items-center gap-2">
+                <label
+                  className="text-xs text-muted-foreground"
+                  htmlFor={`autorouter-band-${index}-max`}
+                >
+                  Difficulty ≤
+                </label>
+                <input
+                  id={`autorouter-band-${index}-max`}
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={band.maxDifficulty}
+                  className="w-16 rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onChange={(event) =>
+                    updateBand(index, {
+                      maxDifficulty: Math.max(
+                        0,
+                        Math.min(100, Number(event.target.value) || 0),
+                      ),
+                    })
+                  }
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto"
+                  onClick={() => removeBand(index)}
+                  aria-label={`Remove the difficulty <=${band.maxDifficulty} band`}
+                >
+                  <Icon name="X" aria-hidden />
+                </Button>
+              </div>
+              {band.fallbackChain.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">
+                  Empty — this band defers to benchmark-ranked selection.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {band.fallbackChain.map((entry, entryIndex) => (
+                    <div
+                      key={`${entry}-${entryIndex}`}
+                      className="flex items-center gap-2 rounded-md border border-input px-2 py-1.5 text-sm"
+                    >
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {entryIndex + 1}.
+                      </span>
+                      <span className="flex-1 truncate">{entry}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={entryIndex === 0}
+                        onClick={() =>
+                          updateBand(index, {
+                            fallbackChain: moveEntry(band.fallbackChain, entryIndex, entryIndex - 1),
+                          })
+                        }
+                        aria-label={`Move ${entry} earlier`}
+                      >
+                        <Icon name="ArrowUp" aria-hidden />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={entryIndex === band.fallbackChain.length - 1}
+                        onClick={() =>
+                          updateBand(index, {
+                            fallbackChain: moveEntry(band.fallbackChain, entryIndex, entryIndex + 1),
+                          })
+                        }
+                        aria-label={`Move ${entry} later`}
+                      >
+                        <Icon name="ArrowDown" aria-hidden />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          updateBand(index, {
+                            fallbackChain: band.fallbackChain.filter((_, i) => i !== entryIndex),
+                          })
+                        }
+                        aria-label={`Remove ${entry}`}
+                      >
+                        <Icon name="X" aria-hidden />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="overflow-hidden rounded-md border border-input">
+                <Command>
+                  <CommandInput placeholder="Add a model to this band's fallback chain…" />
+                  <CommandList className="max-h-40">
+                    <CommandEmpty>
+                      {picker.status === "ready"
+                        ? "No models match your search."
+                        : picker.status === "failed"
+                          ? "Couldn't load the model catalog."
+                          : "Loading models…"}
+                    </CommandEmpty>
+                    {(picker.catalog?.providers ?? []).map((provider) => (
+                      <CommandGroup key={provider.id} heading={provider.displayName}>
+                        {provider.models.map((model) => {
+                          const value = `${provider.id}/${model.model}`;
+                          const alreadyAdded = band.fallbackChain.includes(value);
+                          return (
+                            <CommandItem
+                              key={value}
+                              value={value}
+                              disabled={alreadyAdded}
+                              keywords={[model.displayName, provider.displayName]}
+                              onSelect={() =>
+                                updateBand(index, {
+                                  fallbackChain: [...band.fallbackChain, value],
+                                })
+                              }
+                            >
+                              <Icon name="Plus" aria-hidden />
+                              <span className="truncate">{model.displayName}</span>
+                              {alreadyAdded ? (
+                                <span className="ml-auto text-xs text-muted-foreground">added</span>
+                              ) : null}
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    ))}
+                  </CommandList>
+                </Command>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <Button variant="outline" size="sm" onClick={addBand}>
+        <Icon name="Plus" aria-hidden />
+        Add band
+      </Button>
+    </div>
+  );
 }
 
 function AutoRouterSettings() {
@@ -323,12 +532,10 @@ function AutoRouterSettings() {
         </label>
         <p className="text-xs text-muted-foreground">
           The model that rates each task's difficulty (0-100) before routing.
-          Automatic picks the cheapest launchable model on the classifier's
-          fixed fallback chain (Cursor gpt-5.6-sol-medium → Codex
-          gpt-5.6-luna → any model supporting `none` reasoning effort). Pin a
-          specific model instead if you want the classifier itself to run on
-          a known, fixed model — e.g. Antigravity's free-tier Gemini instead
-          of a paid-provider fallback.
+          <span className="font-medium text-foreground"> Automatic</span> tries
+          your fallback order below, first one actually available wins. Pick a
+          specific model instead to pin the classifier to it, skipping the
+          fallback order entirely.
         </p>
         <div className="overflow-hidden rounded-md border border-input" id="autorouter-decision-agent">
           <Command>
@@ -344,7 +551,7 @@ function AutoRouterSettings() {
               <CommandGroup heading="General">
                 <CommandItem
                   value="automatic"
-                  keywords={["default", "automatic", "cheapest"]}
+                  keywords={["default", "automatic", "cheapest", "fallback"]}
                   onSelect={() => update({ decisionAgent: "automatic" })}
                 >
                   <Icon
@@ -352,7 +559,7 @@ function AutoRouterSettings() {
                     className={settings.decisionAgent === "automatic" ? undefined : "invisible"}
                     aria-hidden
                   />
-                  <span className="truncate">Automatic</span>
+                  <span className="truncate">Automatic (use fallback order below)</span>
                   <span className="ml-auto text-xs text-muted-foreground">default</span>
                 </CommandItem>
               </CommandGroup>
@@ -360,15 +567,34 @@ function AutoRouterSettings() {
                 <CommandGroup key={provider.id} heading={provider.displayName}>
                   {provider.models.map((model) => {
                     const value = `${provider.id}/${model.model}`;
-                    const isSelected = settings.decisionAgent === value;
+                    const isAutomatic = settings.decisionAgent === "automatic";
+                    const isChecked = isAutomatic
+                      ? settings.automaticFallbackChain.includes(value)
+                      : settings.decisionAgent === value;
                     return (
                       <CommandItem
                         key={value}
                         value={value}
                         keywords={[model.displayName, provider.displayName]}
-                        onSelect={() => update({ decisionAgent: value })}
+                        onSelect={() => {
+                          if (isAutomatic) {
+                            // In Automatic mode, this single control doubles
+                            // as the fallback-order editor: selecting a
+                            // model toggles its membership in the ordered
+                            // chain instead of pinning the classifier to it.
+                            update({
+                              automaticFallbackChain: isChecked
+                                ? settings.automaticFallbackChain.filter(
+                                    (entry) => entry !== value,
+                                  )
+                                : [...settings.automaticFallbackChain, value],
+                            });
+                          } else {
+                            update({ decisionAgent: value });
+                          }
+                        }}
                       >
-                        <Icon name="Check" className={isSelected ? undefined : "invisible"} aria-hidden />
+                        <Icon name="Check" className={isChecked ? undefined : "invisible"} aria-hidden />
                         <span className="truncate">{model.displayName}</span>
                         {model.isDefault ? (
                           <span className="ml-auto text-xs text-muted-foreground">default</span>
@@ -381,132 +607,90 @@ function AutoRouterSettings() {
             </CommandList>
           </Command>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Current: <span className="font-medium text-foreground">{settings.decisionAgent}</span>
-        </p>
+        {settings.decisionAgent === "automatic" ? (
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">
+              Fallback order — tried top to bottom, first available and
+              quota-eligible wins. Check items above to add or remove them;
+              reorder with the arrows. Not opinionated by default: this is a
+              plain, editable list, not a fixed rule. Empty, or if none of
+              these are available, falls back to any launchable model as a
+              last resort.
+            </p>
+            {settings.automaticFallbackChain.length === 0 ? (
+              <p className="text-xs text-muted-foreground italic">
+                Empty — automatic mode goes straight to the last-resort fallback.
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {settings.automaticFallbackChain.map((entry, index) => (
+                  <div
+                    key={`${entry}-${index}`}
+                    className="flex items-center gap-2 rounded-md border border-input px-2 py-1.5 text-sm"
+                  >
+                    <span className="text-xs text-muted-foreground tabular-nums">{index + 1}.</span>
+                    <span className="flex-1 truncate">{entry}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={index === 0}
+                      onClick={() =>
+                        update({
+                          automaticFallbackChain: moveEntry(
+                            settings.automaticFallbackChain,
+                            index,
+                            index - 1,
+                          ),
+                        })
+                      }
+                      aria-label={`Move ${entry} earlier`}
+                    >
+                      <Icon name="ArrowUp" aria-hidden />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={index === settings.automaticFallbackChain.length - 1}
+                      onClick={() =>
+                        update({
+                          automaticFallbackChain: moveEntry(
+                            settings.automaticFallbackChain,
+                            index,
+                            index + 1,
+                          ),
+                        })
+                      }
+                      aria-label={`Move ${entry} later`}
+                    >
+                      <Icon name="ArrowDown" aria-hidden />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() =>
+                        update({
+                          automaticFallbackChain: settings.automaticFallbackChain.filter(
+                            (_, i) => i !== index,
+                          ),
+                        })
+                      }
+                      aria-label={`Remove ${entry}`}
+                    >
+                      <Icon name="X" aria-hidden />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Pinned: <span className="font-medium text-foreground">{settings.decisionAgent}</span>
+          </p>
+        )}
       </div>
 
-      <div className="space-y-2">
-        <label className="text-sm font-medium" htmlFor="autorouter-automatic-fallback">
-          Automatic fallback chain
-        </label>
-        <p className="text-xs text-muted-foreground">
-          When Decision agent is Automatic, these are tried in order — first
-          one actually available and quota-eligible wins. Not opinionated by
-          default: this is a plain, editable preference list, not a fixed
-          rule. If none of these are available, it falls back to any
-          launchable model as a last resort.
-        </p>
-        <div className="space-y-1" id="autorouter-automatic-fallback">
-          {settings.automaticFallbackChain.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic">
-              Empty — automatic mode goes straight to the last-resort fallback.
-            </p>
-          ) : (
-            settings.automaticFallbackChain.map((entry, index) => (
-              <div
-                key={`${entry}-${index}`}
-                className="flex items-center gap-2 rounded-md border border-input px-2 py-1.5 text-sm"
-              >
-                <span className="text-xs text-muted-foreground tabular-nums">{index + 1}.</span>
-                <span className="flex-1 truncate">{entry}</span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={index === 0}
-                  onClick={() =>
-                    update({
-                      automaticFallbackChain: moveEntry(
-                        settings.automaticFallbackChain,
-                        index,
-                        index - 1,
-                      ),
-                    })
-                  }
-                  aria-label={`Move ${entry} earlier`}
-                >
-                  <Icon name="ArrowUp" aria-hidden />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={index === settings.automaticFallbackChain.length - 1}
-                  onClick={() =>
-                    update({
-                      automaticFallbackChain: moveEntry(
-                        settings.automaticFallbackChain,
-                        index,
-                        index + 1,
-                      ),
-                    })
-                  }
-                  aria-label={`Move ${entry} later`}
-                >
-                  <Icon name="ArrowDown" aria-hidden />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() =>
-                    update({
-                      automaticFallbackChain: settings.automaticFallbackChain.filter(
-                        (_, i) => i !== index,
-                      ),
-                    })
-                  }
-                  aria-label={`Remove ${entry}`}
-                >
-                  <Icon name="X" aria-hidden />
-                </Button>
-              </div>
-            ))
-          )}
-        </div>
-        <div className="overflow-hidden rounded-md border border-input">
-          <Command>
-            <CommandInput placeholder="Add a model to the fallback chain…" />
-            <CommandList className="max-h-48">
-              <CommandEmpty>
-                {picker.status === "ready"
-                  ? "No models match your search."
-                  : picker.status === "failed"
-                    ? "Couldn't load the model catalog."
-                    : "Loading models…"}
-              </CommandEmpty>
-              {(picker.catalog?.providers ?? []).map((provider) => (
-                <CommandGroup key={provider.id} heading={provider.displayName}>
-                  {provider.models.map((model) => {
-                    const value = `${provider.id}/${model.model}`;
-                    const alreadyAdded = settings.automaticFallbackChain.includes(value);
-                    return (
-                      <CommandItem
-                        key={value}
-                        value={value}
-                        disabled={alreadyAdded}
-                        keywords={[model.displayName, provider.displayName]}
-                        onSelect={() =>
-                          update({
-                            automaticFallbackChain: [
-                              ...settings.automaticFallbackChain,
-                              value,
-                            ],
-                          })
-                        }
-                      >
-                        <Icon name="Plus" aria-hidden />
-                        <span className="truncate">{model.displayName}</span>
-                        {alreadyAdded ? (
-                          <span className="ml-auto text-xs text-muted-foreground">added</span>
-                        ) : null}
-                      </CommandItem>
-                    );
-                  })}
-                </CommandGroup>
-              ))}
-            </CommandList>
-          </Command>
-        </div>
-      </div>
+      <DifficultyBandsSection settings={settings} update={update} picker={picker} />
 
       <div className="space-y-2">
         <label

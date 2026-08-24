@@ -126,6 +126,13 @@ function formatSettings(settings: AutorouterSettings, json: boolean): string {
         ? settings.automaticFallbackChain.join(" -> ")
         : "(none — falls straight to any launchable model)"
     }`,
+    `Difficulty bands: ${
+      settings.difficultyBands.length > 0
+        ? settings.difficultyBands
+            .map((band) => `<=${band.maxDifficulty}: ${band.fallbackChain.join(" -> ") || "(empty)"}`)
+            .join(" | ")
+        : "(none — always uses benchmark-ranked selection)"
+    }`,
     `Custom instructions: ${settings.customInstructions || "(none)"}`,
     "",
   ].join("\n");
@@ -234,7 +241,7 @@ export default async function plugin(bb: BbPluginApi) {
         name: "config",
         summary: "Update Autorouter settings",
         usage:
-          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--automatic-fallback provider/model,provider/model,...] [--instructions text] [--json]",
+          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--automatic-fallback provider/model,provider/model,...] [--difficulty-bands '[{\"maxDifficulty\":N,\"fallbackChain\":[...]}]'] [--instructions text] [--json]",
       },
       {
         name: "route",
@@ -275,7 +282,17 @@ export default async function plugin(bb: BbPluginApi) {
                 .split(",")
                 .map((entry) => entry.trim())
                 .filter((entry) => entry.length > 0);
-            else if (flag === "--instructions")
+            else if (flag === "--difficulty-bands") {
+              let parsedBands: unknown;
+              try {
+                parsedBands = JSON.parse(value);
+              } catch {
+                throw new Error(
+                  '--difficulty-bands expects JSON, e.g. \'[{"maxDifficulty":25,"fallbackChain":["antigravity","codex"]}]\'',
+                );
+              }
+              patch.difficultyBands = parsedBands as AutorouterSettings["difficultyBands"];
+            } else if (flag === "--instructions")
               patch.customInstructions = value;
             else throw new Error(`Unknown config flag: ${flag}`);
           }
