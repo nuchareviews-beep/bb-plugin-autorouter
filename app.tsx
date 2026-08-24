@@ -8,10 +8,19 @@ import {
   useRpc,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
-import type { rpcContract } from "./server";
+import type { ModelCatalog, rpcContract } from "./server";
 import type { RoutedThreadResult } from "./router";
 import type { AutorouterSettings } from "./settings";
 import { Input } from "@/components/ui/input";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Icon } from "@/components/ui/icon";
 import {
   SELECTING_LABEL_BASE,
   SELECTING_LABEL_INTERVAL_MS,
@@ -126,6 +135,11 @@ function AutoRouterPage() {
   );
 }
 
+interface CatalogState {
+  status: "loading" | "ready" | "failed";
+  catalog: ModelCatalog | null;
+}
+
 function AutoRouterSettings() {
   const rpc = useRpc<typeof rpcContract>();
   const [settings, setSettings] = useState<AutorouterSettings | null>(null);
@@ -133,6 +147,30 @@ function AutoRouterSettings() {
   const settingsRef = useRef<AutorouterSettings | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveVersionRef = useRef(0);
+
+  // Decision-agent model picker: same pattern as bb-plugin-prompt-enhancer's
+  // ModelSettingsSection — fetch the live provider/model catalog once, offer
+  // a searchable list instead of a free-text "provider/model" box.
+  const [picker, setPicker] = useState<CatalogState>({
+    status: "loading",
+    catalog: null,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    void rpc
+      .call("listModels")
+      .then((catalog) => {
+        if (!cancelled) setPicker({ status: "ready", catalog });
+      })
+      .catch(() => {
+        if (!cancelled) setPicker({ status: "failed", catalog: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = () => {
     void rpc
@@ -271,24 +309,71 @@ function AutoRouterSettings() {
       </div>
 
       <div className="space-y-2">
-        <label
-          className="text-sm font-medium"
-          htmlFor="autorouter-decision-agent"
-        >
+        <label className="text-sm font-medium" htmlFor="autorouter-decision-agent">
           Decision agent
         </label>
-        <Input
-          id="autorouter-decision-agent"
-          value={settings.decisionAgent}
-          placeholder="automatic or provider/model"
-          onChange={(event) =>
-            update({ decisionAgent: event.target.value }, { debounceMs: 500 })
-          }
-          onBlur={flush}
-        />
         <p className="text-xs text-muted-foreground">
-          Automatic uses the lightest reasoning level the provider can actually
-          launch. Cursor currently reconciles its advertised none level to low.
+          The model that rates each task's difficulty (0-100) before routing.
+          Automatic picks the cheapest launchable model on the classifier's
+          fixed fallback chain (Cursor gpt-5.6-sol-medium → Codex
+          gpt-5.6-luna → any model supporting `none` reasoning effort). Pin a
+          specific model instead if you want the classifier itself to run on
+          a known, fixed model — e.g. Antigravity's free-tier Gemini instead
+          of a paid-provider fallback.
+        </p>
+        <div className="overflow-hidden rounded-md border border-input" id="autorouter-decision-agent">
+          <Command>
+            <CommandInput placeholder="Search providers and models…" />
+            <CommandList className="max-h-64">
+              <CommandEmpty>
+                {picker.status === "ready"
+                  ? "No models match your search."
+                  : picker.status === "failed"
+                    ? "Couldn't load the model catalog."
+                    : "Loading models…"}
+              </CommandEmpty>
+              <CommandGroup heading="General">
+                <CommandItem
+                  value="automatic"
+                  keywords={["default", "automatic", "cheapest"]}
+                  onSelect={() => update({ decisionAgent: "automatic" })}
+                >
+                  <Icon
+                    name="Check"
+                    className={settings.decisionAgent === "automatic" ? undefined : "invisible"}
+                    aria-hidden
+                  />
+                  <span className="truncate">Automatic</span>
+                  <span className="ml-auto text-xs text-muted-foreground">default</span>
+                </CommandItem>
+              </CommandGroup>
+              {(picker.catalog?.providers ?? []).map((provider) => (
+                <CommandGroup key={provider.id} heading={provider.displayName}>
+                  {provider.models.map((model) => {
+                    const value = `${provider.id}/${model.model}`;
+                    const isSelected = settings.decisionAgent === value;
+                    return (
+                      <CommandItem
+                        key={value}
+                        value={value}
+                        keywords={[model.displayName, provider.displayName]}
+                        onSelect={() => update({ decisionAgent: value })}
+                      >
+                        <Icon name="Check" className={isSelected ? undefined : "invisible"} aria-hidden />
+                        <span className="truncate">{model.displayName}</span>
+                        {model.isDefault ? (
+                          <span className="ml-auto text-xs text-muted-foreground">default</span>
+                        ) : null}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              ))}
+            </CommandList>
+          </Command>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Current: <span className="font-medium text-foreground">{settings.decisionAgent}</span>
         </p>
       </div>
 

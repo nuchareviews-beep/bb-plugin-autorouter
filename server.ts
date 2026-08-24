@@ -14,6 +14,9 @@ import {
 } from "./settings.js";
 
 const SETTINGS_KEY = "settings";
+const MODEL_CATALOG_CACHE_KEY = "model-catalog-cache";
+/** Stale-while-revalidate window, matching prompt-enhancer's picker cache. */
+const MODEL_CATALOG_CACHE_MAX_AGE_MS = 5 * 60_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,6 +51,23 @@ const reasoningLevelSchema = z.enum([
   "ultra",
 ]);
 
+const modelCatalogSchema = z.object({
+  providers: z.array(
+    z.object({
+      id: z.string(),
+      displayName: z.string(),
+      models: z.array(
+        z.object({
+          model: z.string(),
+          displayName: z.string(),
+          isDefault: z.boolean(),
+        }),
+      ),
+    }),
+  ),
+});
+export type ModelCatalog = z.infer<typeof modelCatalogSchema>;
+
 const routeResultSchema = z
   .object({
     benchmarkScore: z.number().nullable(),
@@ -76,6 +96,16 @@ export const rpcContract = defineRpcContract({
   createThread: {
     input: z.object({ request: newThreadRequestSchema }).strict(),
     output: routeResultSchema,
+  },
+  /**
+   * Live provider/model catalog for the decision-agent picker, following
+   * the same pattern as bb-plugin-prompt-enhancer's `listModels`: fetch
+   * available providers + their models, cache to KV so a settings-page
+   * reopen answers instantly, refresh in the background afterward.
+   */
+  listModels: {
+    input: z.null(),
+    output: modelCatalogSchema,
   },
 });
 
@@ -117,11 +147,73 @@ export default async function plugin(bb: BbPluginApi) {
     await bb.storage.kv.set(SETTINGS_KEY, defaultAutorouterSettings);
   }
 
+  // Model catalog for the decision-agent picker. Stale-while-revalidate: a
+  // cached catalog (persisted to KV, so a plugin reload still answers
+  // instantly) is served immediately and refreshed in the background;
+  // concurrent callers share one in-flight fetch.
+  let catalogCache: { at: number; catalog: ModelCatalog } | null = null;
+  let catalogInflight: Promise<ModelCatalog> | null = null;
+
+  function refreshModelCatalog(): Promise<ModelCatalog> {
+    catalogInflight ??= (async () => {
+      const available = (await bb.sdk.providers.list({})).filter(
+        (provider) => provider.available,
+      );
+      const settled = await Promise.allSettled(
+        available.map(async (provider): Promise<ModelCatalog["providers"][number]> => {
+          const result = await bb.sdk.providers.models({ providerId: provider.id });
+          return {
+            id: provider.id,
+            displayName: provider.displayName,
+            models: result.models.map((model) => ({
+              model: model.model,
+              displayName: model.displayName,
+              isDefault: model.isDefault,
+            })),
+          };
+        }),
+      );
+      const catalog: ModelCatalog = {
+        providers: settled
+          .filter(
+            (result): result is PromiseFulfilledResult<ModelCatalog["providers"][number]> =>
+              result.status === "fulfilled",
+          )
+          .map((result) => result.value)
+          .filter((provider) => provider.models.length > 0),
+      };
+      catalogCache = { at: Date.now(), catalog };
+      if (catalog.providers.length > 0) {
+        void bb.storage.kv.set(MODEL_CATALOG_CACHE_KEY, catalogCache).catch(() => {});
+      }
+      return catalog;
+    })().finally(() => {
+      catalogInflight = null;
+    });
+    return catalogInflight;
+  }
+
+  async function listModels(): Promise<ModelCatalog> {
+    if (catalogCache === null) {
+      const persisted = await bb.storage.kv.get(MODEL_CATALOG_CACHE_KEY);
+      const parsed = z
+        .object({ at: z.number(), catalog: modelCatalogSchema })
+        .safeParse(persisted);
+      if (parsed.success) catalogCache = parsed.data;
+    }
+    if (catalogCache === null) return refreshModelCatalog();
+    if (Date.now() - catalogCache.at > MODEL_CATALOG_CACHE_MAX_AGE_MS) {
+      void refreshModelCatalog();
+    }
+    return catalogCache.catalog;
+  }
+
   bb.rpc.register(rpcContract, {
     getSettings: readSettings,
     updateSettings,
     createThread: async ({ request }) =>
       createRoutedThread(bb, request, await readSettings()),
+    listModels,
   });
 
   bb.cli.register({
