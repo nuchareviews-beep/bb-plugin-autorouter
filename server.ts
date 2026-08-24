@@ -129,7 +129,10 @@ function formatSettings(settings: AutorouterSettings, json: boolean): string {
     `Difficulty bands: ${
       settings.difficultyBands.length > 0
         ? settings.difficultyBands
-            .map((band) => `<=${band.maxDifficulty}: ${band.fallbackChain.join(" -> ") || "(empty)"}`)
+            .map(
+              (band) =>
+                `${band.comparator}${band.maxDifficulty}: ${band.fallbackChain.join(" -> ") || "(empty)"}`,
+            )
             .join(" | ")
         : "(none — always uses benchmark-ranked selection)"
     }`,
@@ -241,7 +244,7 @@ export default async function plugin(bb: BbPluginApi) {
         name: "config",
         summary: "Update Autorouter settings",
         usage:
-          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--automatic-fallback provider/model,provider/model,...] [--difficulty-bands '[{\"maxDifficulty\":N,\"fallbackChain\":[...]}]'] [--instructions text] [--json]",
+          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--automatic-fallback provider/model,provider/model,...] [--difficulty-bands '[{\"maxDifficulty\":N,\"comparator\":\"<=\"|\"<\"|\">=\"|\">\"|\"==\",\"fallbackChain\":[...]}]'] [--instructions text] [--json]",
       },
       {
         name: "route",
@@ -288,7 +291,7 @@ export default async function plugin(bb: BbPluginApi) {
                 parsedBands = JSON.parse(value);
               } catch {
                 throw new Error(
-                  '--difficulty-bands expects JSON, e.g. \'[{"maxDifficulty":25,"fallbackChain":["antigravity","codex"]}]\'',
+                  '--difficulty-bands expects JSON, e.g. \'[{"maxDifficulty":25,"comparator":"<=","fallbackChain":["antigravity","codex"]}]\'',
                 );
               }
               patch.difficultyBands = parsedBands as AutorouterSettings["difficultyBands"];

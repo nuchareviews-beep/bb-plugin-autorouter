@@ -573,6 +573,24 @@ function candidatesForChainEntry(
   );
 }
 
+export function bandMatchesDifficulty(
+  difficulty: number,
+  band: DifficultyBand,
+): boolean {
+  switch (band.comparator) {
+    case "<=":
+      return difficulty <= band.maxDifficulty;
+    case "<":
+      return difficulty < band.maxDifficulty;
+    case ">=":
+      return difficulty >= band.maxDifficulty;
+    case ">":
+      return difficulty > band.maxDifficulty;
+    case "==":
+      return difficulty === band.maxDifficulty;
+  }
+}
+
 export function difficultyBandSelection(
   candidates: AutoModelCandidate[],
   quota: ReadonlyMap<string, number>,
@@ -584,7 +602,7 @@ export function difficultyBandSelection(
 ): ResolvedRoute | null {
   const band = [...bands]
     .sort((a, b) => a.maxDifficulty - b.maxDifficulty)
-    .find((candidate) => difficulty <= candidate.maxDifficulty);
+    .find((candidate) => bandMatchesDifficulty(difficulty, candidate));
   if (!band) return null;
   for (const entry of band.fallbackChain) {
     const eligible = candidatesForChainEntry(candidates, quota, entry);

@@ -10,7 +10,13 @@ import {
 import { toast } from "sonner";
 import type { ModelCatalog, rpcContract } from "./server";
 import type { RoutedThreadResult } from "./router";
-import type { AutorouterSettings, DifficultyBand } from "./settings";
+import {
+  BAND_COMPARATORS,
+  DEFAULT_BAND_COMPARATOR,
+  type AutorouterSettings,
+  type BandComparator,
+  type DifficultyBand,
+} from "./settings";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -188,7 +194,7 @@ function DifficultyBandsSection({
     update({
       difficultyBands: [
         ...settings.difficultyBands,
-        { maxDifficulty: 50, fallbackChain: [] },
+        { maxDifficulty: 50, comparator: DEFAULT_BAND_COMPARATOR, fallbackChain: [] },
       ],
     });
   }
@@ -220,8 +226,25 @@ function DifficultyBandsSection({
                   className="text-xs text-muted-foreground"
                   htmlFor={`autorouter-band-${index}-max`}
                 >
-                  Difficulty ≤
+                  Difficulty
                 </label>
+                <select
+                  id={`autorouter-band-${index}-comparator`}
+                  aria-label="Comparison operator"
+                  value={band.comparator}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onChange={(event) =>
+                    updateBand(index, {
+                      comparator: event.target.value as BandComparator,
+                    })
+                  }
+                >
+                  {BAND_COMPARATORS.map((comparator) => (
+                    <option key={comparator} value={comparator}>
+                      {comparator}
+                    </option>
+                  ))}
+                </select>
                 <input
                   id={`autorouter-band-${index}-max`}
                   type="number"

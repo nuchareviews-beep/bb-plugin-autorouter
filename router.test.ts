@@ -12,7 +12,9 @@ import {
   quotaRemainingByProvider,
   isRoutableProvider,
   difficultyBandSelection,
+  bandMatchesDifficulty,
 } from "./router.js";
+import type { BandComparator } from "./settings.js";
 
 function candidate(
   providerId: string,
@@ -208,7 +210,7 @@ describe("per-difficulty band selection", () => {
   // Reproduces the plugin's previous hardcoded simple-task band, now as
   // plain settings data instead of constants baked into router.ts.
   const simpleTaskBand = [
-    { maxDifficulty: 25, fallbackChain: ["antigravity", "codex", "claude-code"] },
+    { maxDifficulty: 25, comparator: "<=" as const, fallbackChain: ["antigravity", "codex", "claude-code"] },
   ];
 
   it("prefers Antigravity for a simple task when it's available", () => {
@@ -283,8 +285,8 @@ describe("per-difficulty band selection", () => {
 
   it("picks the lowest-threshold band that still covers the difficulty, checked ascending", () => {
     const bands = [
-      { maxDifficulty: 80, fallbackChain: ["claude-code"] },
-      { maxDifficulty: 20, fallbackChain: ["antigravity"] },
+      { maxDifficulty: 80, comparator: "<=" as const, fallbackChain: ["claude-code"] },
+      { maxDifficulty: 20, comparator: "<=" as const, fallbackChain: ["antigravity"] },
     ];
     expect(
       difficultyBandSelection(allThree, fullQuota, request, 15, 50, false, bands),
@@ -292,7 +294,7 @@ describe("per-difficulty band selection", () => {
   });
 
   it("pins an exact provider/model chain entry, not just a bare provider", () => {
-    const bands = [{ maxDifficulty: 25, fallbackChain: ["codex/gpt-5.6-luna"] }];
+    const bands = [{ maxDifficulty: 25, comparator: "<=" as const, fallbackChain: ["codex/gpt-5.6-luna"] }];
     const withExtraCodexModel = [
       ...allThree,
       candidate("codex", "gpt-5.6-sol", ["medium"]),
@@ -307,5 +309,63 @@ describe("per-difficulty band selection", () => {
       bands,
     );
     expect(result).toMatchObject({ providerId: "codex", model: "gpt-5.6-luna" });
+  });
+});
+
+describe("bandMatchesDifficulty (configurable comparator)", () => {
+  const band = (comparator: BandComparator, maxDifficulty: number) => ({
+    maxDifficulty,
+    comparator,
+    fallbackChain: [],
+  });
+
+  it("<= (default) matches at and below the threshold only", () => {
+    expect(bandMatchesDifficulty(25, band("<=", 25))).toBe(true);
+    expect(bandMatchesDifficulty(24, band("<=", 25))).toBe(true);
+    expect(bandMatchesDifficulty(26, band("<=", 25))).toBe(false);
+  });
+
+  it("< matches strictly below the threshold", () => {
+    expect(bandMatchesDifficulty(25, band("<", 25))).toBe(false);
+    expect(bandMatchesDifficulty(24, band("<", 25))).toBe(true);
+  });
+
+  it(">= matches at and above the threshold", () => {
+    expect(bandMatchesDifficulty(75, band(">=", 75))).toBe(true);
+    expect(bandMatchesDifficulty(74, band(">=", 75))).toBe(false);
+    expect(bandMatchesDifficulty(90, band(">=", 75))).toBe(true);
+  });
+
+  it("> matches strictly above the threshold", () => {
+    expect(bandMatchesDifficulty(75, band(">", 75))).toBe(false);
+    expect(bandMatchesDifficulty(76, band(">", 75))).toBe(true);
+  });
+
+  it("== matches only the exact score", () => {
+    expect(bandMatchesDifficulty(50, band("==", 50))).toBe(true);
+    expect(bandMatchesDifficulty(49, band("==", 50))).toBe(false);
+    expect(bandMatchesDifficulty(51, band("==", 50))).toBe(false);
+  });
+
+  it("difficultyBandSelection actually uses the configured comparator, not a hardcoded <=", () => {
+    const request = {
+      providerId: "codex",
+      model: "gpt-5.6-sol",
+      permissionMode: "accept-edits",
+    } as unknown as NewThreadRequest;
+    const highDifficultyOnly = [
+      { maxDifficulty: 80, comparator: ">=" as const, fallbackChain: ["claude-code"] },
+    ];
+    const quota = new Map([["claude-code", 1]]);
+    const claudeOnly = [candidate("claude-code", "claude-fable-5", ["medium"])];
+
+    // A difficulty of 30 must NOT match a ">=80" band -- if the comparator
+    // were still hardcoded to "<=", this would incorrectly match.
+    expect(
+      difficultyBandSelection(claudeOnly, quota, request, 30, 50, false, highDifficultyOnly),
+    ).toBeNull();
+    expect(
+      difficultyBandSelection(claudeOnly, quota, request, 85, 50, false, highDifficultyOnly),
+    ).toMatchObject({ providerId: "claude-code" });
   });
 });

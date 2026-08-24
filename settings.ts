@@ -16,10 +16,22 @@ const providerOrModelSchema = z
   .max(200)
   .regex(/^[^/]+(\/[^/]+)?$/u, "Must be provider or provider/model");
 
+export const BAND_COMPARATORS = ["<=", "<", ">=", ">", "=="] as const;
+const bandComparatorSchema = z.enum(BAND_COMPARATORS);
+export type BandComparator = z.infer<typeof bandComparatorSchema>;
+export const DEFAULT_BAND_COMPARATOR: BandComparator = "<=";
+
 const difficultyBandSchema = z
   .object({
-    /** This band applies to tasks with difficulty <= this value (0-100). */
+    /** This band applies to tasks whose difficulty (0-100) satisfies
+     * `difficulty <comparator> maxDifficulty` — e.g. "<=" (the default,
+     * matches the plugin's original hardcoded behavior), or ">=" for a
+     * "difficulty at least this high" band, "==" for an exact score, etc.
+     * The field is still named maxDifficulty for backward compatibility
+     * with existing stored settings; with a non-"<=" comparator it's really
+     * just "the band's threshold value". */
     maxDifficulty: z.number().int().min(0).max(100),
+    comparator: bandComparatorSchema,
     /** Ordered provider (or provider/model) preferences tried for tasks in
      * this band, before falling through to the next band or the normal
      * benchmark-ranked path. */
@@ -76,21 +88,47 @@ export const defaultAutorouterSettings: AutorouterSettings = {
   decisionAgent: AUTOMATIC_DECISION_AGENT,
   automaticFallbackChain: ["acp-cursor/gpt-5.6-sol-medium", "codex/gpt-5.6-luna"],
   difficultyBands: [
-    { maxDifficulty: 25, fallbackChain: ["antigravity", "codex", "claude-code"] },
+    {
+      maxDifficulty: 25,
+      comparator: DEFAULT_BAND_COMPARATOR,
+      fallbackChain: ["antigravity", "codex", "claude-code"],
+    },
   ],
   customInstructions: "",
   frugality: 50,
 };
 
+/**
+ * Backfills fields added to nested band objects after settings were first
+ * stored (e.g. `comparator`), so a top-level merge with defaults doesn't
+ * still fail on an old band shape. Only touches what's missing; a band that
+ * already has its own comparator is left alone.
+ */
+function migrateStoredValue(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.difficultyBands)) return record;
+  return {
+    ...record,
+    difficultyBands: record.difficultyBands.map((band) =>
+      typeof band === "object" && band !== null && !("comparator" in band)
+        ? { ...band, comparator: DEFAULT_BAND_COMPARATOR }
+        : band,
+    ),
+  };
+}
+
 export function parseStoredSettings(value: unknown): AutorouterSettings {
   const parsed = autorouterSettingsSchema.safeParse(value);
   if (parsed.success) return parsed.data;
   // Merge with defaults before giving up, so settings stored before a field
-  // was added (e.g. automaticFallbackChain) don't get silently wiped back
-  // to every default — only the genuinely new/invalid keys fall back.
+  // was added (e.g. automaticFallbackChain, or a band's comparator) don't
+  // get silently wiped back to every default — only the genuinely new or
+  // invalid keys fall back.
+  const migrated = migrateStoredValue(value);
   const merged = autorouterSettingsSchema.safeParse({
     ...defaultAutorouterSettings,
-    ...(typeof value === "object" && value !== null ? value : {}),
+    ...(typeof migrated === "object" && migrated !== null ? migrated : {}),
   });
   return merged.success ? merged.data : defaultAutorouterSettings;
 }
