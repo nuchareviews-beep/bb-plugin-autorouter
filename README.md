@@ -113,22 +113,31 @@ simultaneously unavailable or quota-exhausted — a narrow, mostly-last-resort
 condition.
 
 There is no hardcoded difficulty cutoff or provider priority in the code —
-`settings.difficultyBands` is a plain, editable list of
-`{ maxDifficulty, comparator, fallbackChain }` bands, checked low-to-high by
-threshold. The first band whose comparator matches a task's difficulty score
-(`<=`, `<`, `>=`, `>`, or `==` against `maxDifficulty`) skips benchmark
-ranking entirely and routes straight through that band's own ordered
-fallback chain — first provider (or exact `provider/model` pin) that's
-actually available and quota-eligible wins. If nothing in the matched band
-is available, or no band covers the score at all, routing falls through to
-the normal benchmark-ranked path below.
+`settings.difficultyBands` is a plain, editable list of native two-sided
+range bands, `{ minDifficulty, maxDifficulty, fallbackChain }`, checked
+low-to-high by effective lower bound. Either bound may be `null` for
+"unbounded" on that side (`minDifficulty: null` matches down to 0,
+`maxDifficulty: null` matches up to 100; both `null` matches everything).
+The first band whose `[minDifficulty, maxDifficulty]` range (inclusive)
+covers a task's difficulty score skips benchmark ranking entirely and
+routes straight through that band's own ordered fallback chain — first
+provider (or exact `provider/model` pin) that's actually available and
+quota-eligible wins. If nothing in the matched band is available, or no
+band covers the score at all, routing falls through to the normal
+benchmark-ranked path below.
 
-The shipped default reproduces what used to be hardcoded — a `<= 25` band
-with the chain `antigravity → codex → claude-code` (Cursor is deliberately
-not in the default chain; it keeps its normal ranked path at every
-difficulty) — but it's just the *default value* of a setting now, not logic
-baked into `router.ts`. Add, remove, reorder, or clear bands freely from the
-settings page or `bb autorouter config --difficulty-bands '[...]'`.
+Ranges are genuinely two-sided, not just a series of independent
+thresholds — e.g. `0–25` for one model, `26–75` for another, `76–100` for a
+third, all expressible as three bands with no gaps or overlaps needed. A
+single exact score is just `minDifficulty === maxDifficulty`.
+
+The shipped default reproduces what used to be hardcoded — a `0–25` band
+(`minDifficulty: null`) with the chain `antigravity → codex → claude-code`
+(Cursor is deliberately not in the default chain; it keeps its normal
+ranked path at every difficulty) — but it's just the *default value* of a
+setting now, not logic baked into `router.ts`. Add, remove, reorder, or
+clear bands freely from the settings page or
+`bb autorouter config --difficulty-bands '[...]'`.
 
 An explicit model override (user-requested, or from custom instructions)
 still takes priority over band matching and applies before it.

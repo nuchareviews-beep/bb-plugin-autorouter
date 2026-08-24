@@ -10,13 +10,7 @@ import {
 import { toast } from "sonner";
 import type { ModelCatalog, rpcContract } from "./server";
 import type { RoutedThreadResult } from "./router";
-import {
-  BAND_COMPARATORS,
-  DEFAULT_BAND_COMPARATOR,
-  type AutorouterSettings,
-  type BandComparator,
-  type DifficultyBand,
-} from "./settings";
+import type { AutorouterSettings, DifficultyBand } from "./settings";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -160,12 +154,26 @@ type UpdateSettings = (
   options?: { debounceMs?: number },
 ) => void;
 
+/** Empty means "unbounded" on that side; the input shows a blank field. */
+function boundInputValue(bound: number | null): string {
+  return bound === null ? "" : String(bound);
+}
+
+function parseBoundInput(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
 /**
- * Per-difficulty model selection: an ordered list of difficulty bands
- * (`maxDifficulty` + its own fallback chain), checked low-to-high. Mirrors
- * the Decision agent section's fallback-order editor, just scoped per band
- * instead of to the classifier — same list/reorder/remove pattern, plus a
- * per-band model picker and add/remove band controls.
+ * Per-difficulty model selection: an ordered list of difficulty bands, each
+ * a native two-sided range (`minDifficulty`/`maxDifficulty`, either end
+ * nullable for "unbounded") plus its own fallback chain. Checked low to
+ * high by effective lower bound. Mirrors the Decision agent section's
+ * fallback-order editor, just scoped per band instead of to the classifier
+ * — same list/reorder/remove pattern, plus a per-band model picker and
+ * add/remove band controls.
  */
 function DifficultyBandsSection({
   settings,
@@ -194,21 +202,23 @@ function DifficultyBandsSection({
     update({
       difficultyBands: [
         ...settings.difficultyBands,
-        { maxDifficulty: 50, comparator: DEFAULT_BAND_COMPARATOR, fallbackChain: [] },
+        { minDifficulty: null, maxDifficulty: 50, fallbackChain: [] },
       ],
     });
   }
 
   const sortedForDisplay = [...settings.difficultyBands]
     .map((band, index) => ({ band, index }))
-    .sort((a, b) => a.band.maxDifficulty - b.band.maxDifficulty);
+    .sort((a, b) => (a.band.minDifficulty ?? -1) - (b.band.minDifficulty ?? -1));
 
   return (
     <div className="space-y-2">
       <label className="text-sm font-medium">Per-difficulty model selection</label>
       <p className="text-xs text-muted-foreground">
-        Route tasks under a difficulty threshold straight through a fixed
-        fallback chain instead of the normal benchmark-ranked selection.
+        Route tasks whose difficulty falls in a range straight through a
+        fixed fallback chain instead of the normal benchmark-ranked
+        selection — e.g. 0–25 for one model, 26–75 for another. Leave either
+        side blank for an open-ended range (blank min = 0, blank max = 100).
         Checked low to high — the first band that covers a task's difficulty
         score wins. Empty by default beyond whatever bands you add here;
         there is no hardcoded difficulty cutoff.
@@ -224,40 +234,38 @@ function DifficultyBandsSection({
               <div className="flex items-center gap-2">
                 <label
                   className="text-xs text-muted-foreground"
-                  htmlFor={`autorouter-band-${index}-max`}
+                  htmlFor={`autorouter-band-${index}-min`}
                 >
                   Difficulty
                 </label>
-                <select
-                  id={`autorouter-band-${index}-comparator`}
-                  aria-label="Comparison operator"
-                  value={band.comparator}
-                  className="rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                <input
+                  id={`autorouter-band-${index}-min`}
+                  type="number"
+                  min={0}
+                  max={100}
+                  placeholder="0"
+                  aria-label="Minimum difficulty (inclusive; blank = unbounded)"
+                  value={boundInputValue(band.minDifficulty)}
+                  className="w-16 rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onChange={(event) =>
                     updateBand(index, {
-                      comparator: event.target.value as BandComparator,
+                      minDifficulty: parseBoundInput(event.target.value),
                     })
                   }
-                >
-                  {BAND_COMPARATORS.map((comparator) => (
-                    <option key={comparator} value={comparator}>
-                      {comparator}
-                    </option>
-                  ))}
-                </select>
+                />
+                <span className="text-xs text-muted-foreground">to</span>
                 <input
                   id={`autorouter-band-${index}-max`}
                   type="number"
                   min={0}
                   max={100}
-                  value={band.maxDifficulty}
+                  placeholder="100"
+                  aria-label="Maximum difficulty (inclusive; blank = unbounded)"
+                  value={boundInputValue(band.maxDifficulty)}
                   className="w-16 rounded-md border border-input bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onChange={(event) =>
                     updateBand(index, {
-                      maxDifficulty: Math.max(
-                        0,
-                        Math.min(100, Number(event.target.value) || 0),
-                      ),
+                      maxDifficulty: parseBoundInput(event.target.value),
                     })
                   }
                 />
@@ -266,7 +274,7 @@ function DifficultyBandsSection({
                   size="icon"
                   className="ml-auto"
                   onClick={() => removeBand(index)}
-                  aria-label={`Remove the difficulty <=${band.maxDifficulty} band`}
+                  aria-label={`Remove the difficulty ${boundInputValue(band.minDifficulty) || "0"}-${boundInputValue(band.maxDifficulty) || "100"} band`}
                 >
                   <Icon name="X" aria-hidden />
                 </Button>

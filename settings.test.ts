@@ -31,32 +31,51 @@ describe("parseStoredSettings migration", () => {
     expect(result.difficultyBands).toEqual(defaultAutorouterSettings.difficultyBands);
   });
 
-  it("backfills a missing band comparator instead of discarding the whole band list", () => {
+  it("migrates the oldest pre-comparator band shape (implicit <=) into a range", () => {
     const legacyStored = {
       ...defaultAutorouterSettings,
       difficultyBands: [
-        // Pre-comparator shape: no `comparator` field at all.
+        // Oldest shape: no `comparator`, no `minDifficulty` at all.
         { maxDifficulty: 40, fallbackChain: ["codex/gpt-5.6-luna"] },
       ],
     };
     const result = parseStoredSettings(legacyStored);
     expect(result.difficultyBands).toEqual([
-      { maxDifficulty: 40, comparator: "<=", fallbackChain: ["codex/gpt-5.6-luna"] },
+      { minDifficulty: null, maxDifficulty: 40, fallbackChain: ["codex/gpt-5.6-luna"] },
     ]);
   });
 
-  it("leaves a band's existing comparator alone during migration", () => {
+  it("migrates each comparator variant from the intermediate shape into an equivalent range", () => {
     const legacyStored = {
       ...defaultAutorouterSettings,
       difficultyBands: [
-        { maxDifficulty: 80, comparator: ">=", fallbackChain: ["claude-code"] },
-        { maxDifficulty: 10, fallbackChain: ["antigravity"] }, // missing comparator
+        { maxDifficulty: 25, comparator: "<=", fallbackChain: ["a"] },
+        { maxDifficulty: 25, comparator: "<", fallbackChain: ["b"] },
+        { maxDifficulty: 75, comparator: ">=", fallbackChain: ["c"] },
+        { maxDifficulty: 75, comparator: ">", fallbackChain: ["d"] },
+        { maxDifficulty: 50, comparator: "==", fallbackChain: ["e"] },
       ],
     };
     const result = parseStoredSettings(legacyStored);
     expect(result.difficultyBands).toEqual([
-      { maxDifficulty: 80, comparator: ">=", fallbackChain: ["claude-code"] },
-      { maxDifficulty: 10, comparator: "<=", fallbackChain: ["antigravity"] },
+      { minDifficulty: null, maxDifficulty: 25, fallbackChain: ["a"] },
+      { minDifficulty: null, maxDifficulty: 24, fallbackChain: ["b"] },
+      { minDifficulty: 75, maxDifficulty: null, fallbackChain: ["c"] },
+      { minDifficulty: 76, maxDifficulty: null, fallbackChain: ["d"] },
+      { minDifficulty: 50, maxDifficulty: 50, fallbackChain: ["e"] },
+    ]);
+  });
+
+  it("leaves a band already in the current range shape alone during migration", () => {
+    const legacyStored = {
+      ...defaultAutorouterSettings,
+      difficultyBands: [
+        { minDifficulty: 26, maxDifficulty: 75, fallbackChain: ["codex/gpt-5.6-terra"] },
+      ],
+    };
+    const result = parseStoredSettings(legacyStored);
+    expect(result.difficultyBands).toEqual([
+      { minDifficulty: 26, maxDifficulty: 75, fallbackChain: ["codex/gpt-5.6-terra"] },
     ]);
   });
 

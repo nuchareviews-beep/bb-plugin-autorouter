@@ -14,7 +14,6 @@ import {
   difficultyBandSelection,
   bandMatchesDifficulty,
 } from "./router.js";
-import type { BandComparator } from "./settings.js";
 
 function candidate(
   providerId: string,
@@ -191,7 +190,8 @@ describe("leastClassifierPermissionMode", () => {
   });
 });
 
-describe("per-difficulty band selection", () => {
+
+describe("per-difficulty band selection (native two-sided ranges)", () => {
   const request = {
     providerId: "codex",
     model: "gpt-5.6-sol",
@@ -209,8 +209,13 @@ describe("per-difficulty band selection", () => {
   ]);
   // Reproduces the plugin's previous hardcoded simple-task band, now as
   // plain settings data instead of constants baked into router.ts.
+  // minDifficulty: null means "unbounded below" (matches down to 0).
   const simpleTaskBand = [
-    { maxDifficulty: 25, comparator: "<=" as const, fallbackChain: ["antigravity", "codex", "claude-code"] },
+    {
+      minDifficulty: null,
+      maxDifficulty: 25,
+      fallbackChain: ["antigravity", "codex", "claude-code"],
+    },
   ];
 
   it("prefers Antigravity for a simple task when it's available", () => {
@@ -264,7 +269,7 @@ describe("per-difficulty band selection", () => {
     ).toMatchObject({ providerId: "codex" });
   });
 
-  it("does not apply above the band's difficulty threshold", () => {
+  it("does not apply above the band's upper bound", () => {
     expect(
       difficultyBandSelection(allThree, fullQuota, request, 30, 50, false, simpleTaskBand),
     ).toBeNull();
@@ -285,16 +290,23 @@ describe("per-difficulty band selection", () => {
 
   it("picks the lowest-threshold band that still covers the difficulty, checked ascending", () => {
     const bands = [
-      { maxDifficulty: 80, comparator: "<=" as const, fallbackChain: ["claude-code"] },
-      { maxDifficulty: 20, comparator: "<=" as const, fallbackChain: ["antigravity"] },
+      { minDifficulty: 21, maxDifficulty: 80, fallbackChain: ["claude-code"] },
+      { minDifficulty: null, maxDifficulty: 20, fallbackChain: ["antigravity"] },
     ];
+    // Listed out of order on purpose -- selection must sort by effective
+    // lower bound itself, not rely on array order.
     expect(
       difficultyBandSelection(allThree, fullQuota, request, 15, 50, false, bands),
     ).toMatchObject({ providerId: "antigravity" });
+    expect(
+      difficultyBandSelection(allThree, fullQuota, request, 50, 50, false, bands),
+    ).toMatchObject({ providerId: "claude-code" });
   });
 
   it("pins an exact provider/model chain entry, not just a bare provider", () => {
-    const bands = [{ maxDifficulty: 25, comparator: "<=" as const, fallbackChain: ["codex/gpt-5.6-luna"] }];
+    const bands = [
+      { minDifficulty: null, maxDifficulty: 25, fallbackChain: ["codex/gpt-5.6-luna"] },
+    ];
     const withExtraCodexModel = [
       ...allThree,
       candidate("codex", "gpt-5.6-sol", ["medium"]),
@@ -310,57 +322,95 @@ describe("per-difficulty band selection", () => {
     );
     expect(result).toMatchObject({ providerId: "codex", model: "gpt-5.6-luna" });
   });
+
+  it("routes a genuine two-sided range (e.g. 26-75) distinctly from its neighbors", () => {
+    const bands = [
+      { minDifficulty: null, maxDifficulty: 25, fallbackChain: ["antigravity"] },
+      { minDifficulty: 26, maxDifficulty: 75, fallbackChain: ["codex/gpt-5.6-terra"] },
+      { minDifficulty: 76, maxDifficulty: null, fallbackChain: ["claude-code"] },
+    ];
+    const withTerra = [...allThree, candidate("codex", "gpt-5.6-terra", ["medium"])];
+    const quota = new Map([["antigravity", 1], ["codex", 1], ["claude-code", 1]]);
+
+    expect(
+      difficultyBandSelection(withTerra, quota, request, 25, 50, false, bands),
+    ).toMatchObject({ providerId: "antigravity" });
+    expect(
+      difficultyBandSelection(withTerra, quota, request, 26, 50, false, bands),
+    ).toMatchObject({ providerId: "codex", model: "gpt-5.6-terra" });
+    expect(
+      difficultyBandSelection(withTerra, quota, request, 75, 50, false, bands),
+    ).toMatchObject({ providerId: "codex", model: "gpt-5.6-terra" });
+    expect(
+      difficultyBandSelection(withTerra, quota, request, 76, 50, false, bands),
+    ).toMatchObject({ providerId: "claude-code" });
+  });
+
+  it("a fully unbounded band (min and max both null) matches every difficulty", () => {
+    const bands = [
+      { minDifficulty: null, maxDifficulty: null, fallbackChain: ["claude-code"] },
+    ];
+    expect(
+      difficultyBandSelection(allThree, fullQuota, request, 0, 50, false, bands),
+    ).toMatchObject({ providerId: "claude-code" });
+    expect(
+      difficultyBandSelection(allThree, fullQuota, request, 100, 50, false, bands),
+    ).toMatchObject({ providerId: "claude-code" });
+  });
 });
 
-describe("bandMatchesDifficulty (configurable comparator)", () => {
-  const band = (comparator: BandComparator, maxDifficulty: number) => ({
+describe("bandMatchesDifficulty (native range)", () => {
+  const band = (minDifficulty: number | null, maxDifficulty: number | null) => ({
+    minDifficulty,
     maxDifficulty,
-    comparator,
     fallbackChain: [],
   });
 
-  it("<= (default) matches at and below the threshold only", () => {
-    expect(bandMatchesDifficulty(25, band("<=", 25))).toBe(true);
-    expect(bandMatchesDifficulty(24, band("<=", 25))).toBe(true);
-    expect(bandMatchesDifficulty(26, band("<=", 25))).toBe(false);
+  it("unbounded below (min null) matches down to 0", () => {
+    expect(bandMatchesDifficulty(0, band(null, 25))).toBe(true);
+    expect(bandMatchesDifficulty(25, band(null, 25))).toBe(true);
+    expect(bandMatchesDifficulty(26, band(null, 25))).toBe(false);
   });
 
-  it("< matches strictly below the threshold", () => {
-    expect(bandMatchesDifficulty(25, band("<", 25))).toBe(false);
-    expect(bandMatchesDifficulty(24, band("<", 25))).toBe(true);
+  it("unbounded above (max null) matches up to 100", () => {
+    expect(bandMatchesDifficulty(90, band(75, null))).toBe(true);
+    expect(bandMatchesDifficulty(74, band(75, null))).toBe(false);
+    expect(bandMatchesDifficulty(100, band(75, null))).toBe(true);
   });
 
-  it(">= matches at and above the threshold", () => {
-    expect(bandMatchesDifficulty(75, band(">=", 75))).toBe(true);
-    expect(bandMatchesDifficulty(74, band(">=", 75))).toBe(false);
-    expect(bandMatchesDifficulty(90, band(">=", 75))).toBe(true);
+  it("a two-sided range matches only within [min, max] inclusive", () => {
+    expect(bandMatchesDifficulty(25, band(26, 75))).toBe(false);
+    expect(bandMatchesDifficulty(26, band(26, 75))).toBe(true);
+    expect(bandMatchesDifficulty(50, band(26, 75))).toBe(true);
+    expect(bandMatchesDifficulty(75, band(26, 75))).toBe(true);
+    expect(bandMatchesDifficulty(76, band(26, 75))).toBe(false);
   });
 
-  it("> matches strictly above the threshold", () => {
-    expect(bandMatchesDifficulty(75, band(">", 75))).toBe(false);
-    expect(bandMatchesDifficulty(76, band(">", 75))).toBe(true);
+  it("min === max matches only that exact score", () => {
+    expect(bandMatchesDifficulty(50, band(50, 50))).toBe(true);
+    expect(bandMatchesDifficulty(49, band(50, 50))).toBe(false);
+    expect(bandMatchesDifficulty(51, band(50, 50))).toBe(false);
   });
 
-  it("== matches only the exact score", () => {
-    expect(bandMatchesDifficulty(50, band("==", 50))).toBe(true);
-    expect(bandMatchesDifficulty(49, band("==", 50))).toBe(false);
-    expect(bandMatchesDifficulty(51, band("==", 50))).toBe(false);
+  it("fully unbounded (both null) matches everything", () => {
+    expect(bandMatchesDifficulty(0, band(null, null))).toBe(true);
+    expect(bandMatchesDifficulty(100, band(null, null))).toBe(true);
   });
 
-  it("difficultyBandSelection actually uses the configured comparator, not a hardcoded <=", () => {
+  it("difficultyBandSelection actually uses the range, not a hardcoded <=", () => {
     const request = {
       providerId: "codex",
       model: "gpt-5.6-sol",
       permissionMode: "accept-edits",
     } as unknown as NewThreadRequest;
     const highDifficultyOnly = [
-      { maxDifficulty: 80, comparator: ">=" as const, fallbackChain: ["claude-code"] },
+      { minDifficulty: 80, maxDifficulty: null, fallbackChain: ["claude-code"] },
     ];
     const quota = new Map([["claude-code", 1]]);
     const claudeOnly = [candidate("claude-code", "claude-fable-5", ["medium"])];
 
-    // A difficulty of 30 must NOT match a ">=80" band -- if the comparator
-    // were still hardcoded to "<=", this would incorrectly match.
+    // A difficulty of 30 must NOT match a "80+" band -- if the band were
+    // still hardcoded to "<=", this would incorrectly match.
     expect(
       difficultyBandSelection(claudeOnly, quota, request, 30, 50, false, highDifficultyOnly),
     ).toBeNull();

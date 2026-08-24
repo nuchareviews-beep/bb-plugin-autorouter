@@ -547,14 +547,15 @@ export function fallbackSelection(
 }
 
 /**
- * Per-difficulty model selection: `settings.difficultyBands`, checked
- * low-to-high by `maxDifficulty`. The first band covering the task's
+ * Per-difficulty model selection: `settings.difficultyBands`, native
+ * two-sided ranges checked low-to-high by effective lower bound. The first
+ * band whose [minDifficulty, maxDifficulty] range covers the task's
  * difficulty score routes through that band's own fallback chain instead of
  * the normal CursorBench-driven ranking below — skipping capability-matched
  * ranking entirely for difficulty ranges where the user has said "just use
  * this" (e.g. simple tasks don't need a benchmark curve built for harder
  * work; they need the cheapest thing that can do them). Bands, their
- * thresholds, and their chains are a plain user setting — there is no
+ * ranges, and their chains are a plain user setting — there is no
  * hardcoded difficulty cutoff or provider priority left in this file.
  */
 function candidatesForChainEntry(
@@ -577,18 +578,14 @@ export function bandMatchesDifficulty(
   difficulty: number,
   band: DifficultyBand,
 ): boolean {
-  switch (band.comparator) {
-    case "<=":
-      return difficulty <= band.maxDifficulty;
-    case "<":
-      return difficulty < band.maxDifficulty;
-    case ">=":
-      return difficulty >= band.maxDifficulty;
-    case ">":
-      return difficulty > band.maxDifficulty;
-    case "==":
-      return difficulty === band.maxDifficulty;
-  }
+  if (band.minDifficulty !== null && difficulty < band.minDifficulty) return false;
+  if (band.maxDifficulty !== null && difficulty > band.maxDifficulty) return false;
+  return true;
+}
+
+/** Null (unbounded below) sorts first, ahead of any real threshold. */
+function effectiveMin(band: DifficultyBand): number {
+  return band.minDifficulty ?? -1;
 }
 
 export function difficultyBandSelection(
@@ -601,7 +598,7 @@ export function difficultyBandSelection(
   bands: readonly DifficultyBand[],
 ): ResolvedRoute | null {
   const band = [...bands]
-    .sort((a, b) => a.maxDifficulty - b.maxDifficulty)
+    .sort((a, b) => effectiveMin(a) - effectiveMin(b))
     .find((candidate) => bandMatchesDifficulty(difficulty, candidate));
   if (!band) return null;
   for (const entry of band.fallbackChain) {
