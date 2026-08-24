@@ -121,6 +121,11 @@ function formatSettings(settings: AutorouterSettings, json: boolean): string {
     `Enabled: ${settings.enabled ? "yes" : "no"}`,
     `Frugality: ${settings.frugality}/100 ($ -> $$$)`,
     `Decision agent: ${settings.decisionAgent}`,
+    `Automatic fallback chain: ${
+      settings.automaticFallbackChain.length > 0
+        ? settings.automaticFallbackChain.join(" -> ")
+        : "(none — falls straight to any launchable model)"
+    }`,
     `Custom instructions: ${settings.customInstructions || "(none)"}`,
     "",
   ].join("\n");
@@ -229,7 +234,7 @@ export default async function plugin(bb: BbPluginApi) {
         name: "config",
         summary: "Update Autorouter settings",
         usage:
-          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--instructions text] [--json]",
+          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--automatic-fallback provider/model,provider/model,...] [--instructions text] [--json]",
       },
       {
         name: "route",
@@ -265,6 +270,11 @@ export default async function plugin(bb: BbPluginApi) {
             if (flag === "--enabled") patch.enabled = parseBoolean(value);
             else if (flag === "--frugality") patch.frugality = Number(value);
             else if (flag === "--decision-agent") patch.decisionAgent = value;
+            else if (flag === "--automatic-fallback")
+              patch.automaticFallbackChain = value
+                .split(",")
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
             else if (flag === "--instructions")
               patch.customInstructions = value;
             else throw new Error(`Unknown config flag: ${flag}`);

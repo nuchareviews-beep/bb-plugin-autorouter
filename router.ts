@@ -373,10 +373,21 @@ function classifierCandidate(
         (candidate.model.model === model || candidate.model.id === model),
     );
   const configured = settings.decisionAgent.split("/", 2);
+  const fromFallbackChain = () => {
+    for (const entry of settings.automaticFallbackChain) {
+      const [providerId, model] = entry.split("/", 2);
+      const found = exact(providerId ?? "", model ?? "");
+      if (found) return found;
+    }
+    return undefined;
+  };
   const selected =
     settings.decisionAgent === AUTOMATIC_DECISION_AGENT
-      ? (exact("acp-cursor", "gpt-5.6-sol-medium") ??
-        exact("codex", "gpt-5.6-luna") ??
+      ? // The user's ordered provider/model preferences, tried in order;
+        // falling further to any launchable model, then whatever's first,
+        // is a last-resort safety net (not a preference) for when none of
+        // the configured chain is actually available right now.
+        (fromFallbackChain() ??
         usable.find((candidate) =>
           candidate.model.supportedReasoningEfforts.some(
             (effort) => effort.reasoningEffort === "none",

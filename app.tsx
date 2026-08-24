@@ -12,6 +12,7 @@ import type { ModelCatalog, rpcContract } from "./server";
 import type { RoutedThreadResult } from "./router";
 import type { AutorouterSettings } from "./settings";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
@@ -28,6 +29,14 @@ import {
   toCssContentString,
 } from "./selecting-label";
 import "./autorouter.css";
+
+/** Swaps the entries at `from` and `to`; out-of-range indices are a no-op. */
+function moveEntry<T>(list: readonly T[], from: number, to: number): T[] {
+  if (to < 0 || to >= list.length || from === to) return [...list];
+  const next = [...list];
+  [next[from], next[to]] = [next[to] as T, next[from] as T];
+  return next;
+}
 
 const AUTO_ROUTER_COMPOSE_LAYOUT_CLASS =
   "mx-auto flex w-full max-w-[760px] flex-col px-4 pb-4 pt-14";
@@ -375,6 +384,128 @@ function AutoRouterSettings() {
         <p className="text-xs text-muted-foreground">
           Current: <span className="font-medium text-foreground">{settings.decisionAgent}</span>
         </p>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium" htmlFor="autorouter-automatic-fallback">
+          Automatic fallback chain
+        </label>
+        <p className="text-xs text-muted-foreground">
+          When Decision agent is Automatic, these are tried in order — first
+          one actually available and quota-eligible wins. Not opinionated by
+          default: this is a plain, editable preference list, not a fixed
+          rule. If none of these are available, it falls back to any
+          launchable model as a last resort.
+        </p>
+        <div className="space-y-1" id="autorouter-automatic-fallback">
+          {settings.automaticFallbackChain.length === 0 ? (
+            <p className="text-xs text-muted-foreground italic">
+              Empty — automatic mode goes straight to the last-resort fallback.
+            </p>
+          ) : (
+            settings.automaticFallbackChain.map((entry, index) => (
+              <div
+                key={`${entry}-${index}`}
+                className="flex items-center gap-2 rounded-md border border-input px-2 py-1.5 text-sm"
+              >
+                <span className="text-xs text-muted-foreground tabular-nums">{index + 1}.</span>
+                <span className="flex-1 truncate">{entry}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={index === 0}
+                  onClick={() =>
+                    update({
+                      automaticFallbackChain: moveEntry(
+                        settings.automaticFallbackChain,
+                        index,
+                        index - 1,
+                      ),
+                    })
+                  }
+                  aria-label={`Move ${entry} earlier`}
+                >
+                  <Icon name="ArrowUp" aria-hidden />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={index === settings.automaticFallbackChain.length - 1}
+                  onClick={() =>
+                    update({
+                      automaticFallbackChain: moveEntry(
+                        settings.automaticFallbackChain,
+                        index,
+                        index + 1,
+                      ),
+                    })
+                  }
+                  aria-label={`Move ${entry} later`}
+                >
+                  <Icon name="ArrowDown" aria-hidden />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() =>
+                    update({
+                      automaticFallbackChain: settings.automaticFallbackChain.filter(
+                        (_, i) => i !== index,
+                      ),
+                    })
+                  }
+                  aria-label={`Remove ${entry}`}
+                >
+                  <Icon name="X" aria-hidden />
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="overflow-hidden rounded-md border border-input">
+          <Command>
+            <CommandInput placeholder="Add a model to the fallback chain…" />
+            <CommandList className="max-h-48">
+              <CommandEmpty>
+                {picker.status === "ready"
+                  ? "No models match your search."
+                  : picker.status === "failed"
+                    ? "Couldn't load the model catalog."
+                    : "Loading models…"}
+              </CommandEmpty>
+              {(picker.catalog?.providers ?? []).map((provider) => (
+                <CommandGroup key={provider.id} heading={provider.displayName}>
+                  {provider.models.map((model) => {
+                    const value = `${provider.id}/${model.model}`;
+                    const alreadyAdded = settings.automaticFallbackChain.includes(value);
+                    return (
+                      <CommandItem
+                        key={value}
+                        value={value}
+                        disabled={alreadyAdded}
+                        keywords={[model.displayName, provider.displayName]}
+                        onSelect={() =>
+                          update({
+                            automaticFallbackChain: [
+                              ...settings.automaticFallbackChain,
+                              value,
+                            ],
+                          })
+                        }
+                      >
+                        <Icon name="Plus" aria-hidden />
+                        <span className="truncate">{model.displayName}</span>
+                        {alreadyAdded ? (
+                          <span className="ml-auto text-xs text-muted-foreground">added</span>
+                        ) : null}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              ))}
+            </CommandList>
+          </Command>
+        </div>
       </div>
 
       <div className="space-y-2">
