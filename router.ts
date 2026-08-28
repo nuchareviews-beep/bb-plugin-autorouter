@@ -12,11 +12,13 @@ import {
   type AutorouterSettings,
   type DifficultyBand,
   type TaskTypeBand,
+  type EscalationRule,
 } from "./settings.js";
 
 const MAX_TASK_TEXT_LENGTH = 20_000;
 const DEFAULT_DIFFICULTY = 50;
 const CLASSIFIER_TIMEOUT_MS = 60_000;
+const ESCALATION_STATE_KEY = "escalation-state";
 
 export { isRoutableProvider };
 
@@ -50,6 +52,8 @@ export interface ResolvedRoute {
 export interface RoutedThreadResult extends ResolvedRoute {
   threadId: string;
 }
+
+type EscalationState = Record<string, { responsesRemaining: number }>;
 
 type UsageResponse = Awaited<
   ReturnType<BbPluginApi["sdk"]["system"]["usageLimits"]>
@@ -208,6 +212,65 @@ export function quotaRemainingByProvider(
       }),
     ],
   ]);
+}
+
+function parseEscalationState(value: unknown): EscalationState {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([id, entry]) => {
+      if (
+        typeof entry !== "object" ||
+        entry === null ||
+        Array.isArray(entry) ||
+        !("responsesRemaining" in entry) ||
+        typeof entry.responsesRemaining !== "number" ||
+        entry.responsesRemaining <= 0
+      ) {
+        return [];
+      }
+      return [[id, { responsesRemaining: entry.responsesRemaining }]];
+    }),
+  );
+}
+
+async function readEscalationState(bb: BbPluginApi): Promise<EscalationState> {
+  return parseEscalationState(
+    await bb.storage.kv.get(ESCALATION_STATE_KEY),
+  );
+}
+
+export async function checkEscalation(
+  bb: BbPluginApi,
+  rules: readonly EscalationRule[],
+  quota: ReadonlyMap<string, number>,
+): Promise<{ rule: EscalationRule; note: string } | null> {
+  const state = await readEscalationState(bb);
+  for (const rule of rules) {
+    if ((state[rule.id]?.responsesRemaining ?? 0) > 0) {
+      return { rule, note: rule.handoffNote };
+    }
+  }
+  for (const rule of rules) {
+    if ((quota.get(rule.fromProvider) ?? 1) > 0) continue;
+    state[rule.id] = { responsesRemaining: rule.responseLimit };
+    await bb.storage.kv.set(ESCALATION_STATE_KEY, state);
+    return { rule, note: rule.handoffNote };
+  }
+  return null;
+}
+
+export async function consumeEscalation(
+  bb: BbPluginApi,
+  ruleId: string,
+): Promise<void> {
+  const state = await readEscalationState(bb);
+  const entry = state[ruleId];
+  if (!entry) return;
+  entry.responsesRemaining -= 1;
+  if (entry.responsesRemaining <= 0) delete state[ruleId];
+  await bb.storage.kv.set(ESCALATION_STATE_KEY, state);
 }
 
 function difficultyPrompt(args: {
@@ -583,6 +646,30 @@ export function fallbackSelection(
     reasoningLevel: selected.model.defaultReasoningEffort,
     supportsServiceTier: selected.supportsServiceTier,
   };
+}
+
+/**
+ * The caller that accepts this route should prepend `rule.handoffNote` to the
+ * text input in `request.input` immediately before spawning the routed thread.
+ */
+export function escalationRoute(
+  candidates: AutoModelCandidate[],
+  quota: ReadonlyMap<string, number>,
+  request: NewThreadRequest,
+  difficulty: number,
+  frugality: number,
+  rule: EscalationRule,
+): ResolvedRoute | null {
+  const [providerId, model] = rule.toModel.split("/", 2);
+  const eligible = candidates.filter(
+    (candidate) =>
+      candidate.providerId === providerId &&
+      (candidate.model.model === model || candidate.model.id === model) &&
+      (quota.get(candidate.providerId) ?? 1) > 0,
+  );
+  return eligible.length > 0
+    ? fallbackSelection(eligible, request, difficulty, frugality, false)
+    : null;
 }
 
 /**
