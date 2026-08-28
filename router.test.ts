@@ -13,6 +13,7 @@ import {
   isRoutableProvider,
   difficultyBandSelection,
   bandMatchesDifficulty,
+  taskTypeBandSelection,
 } from "./router.js";
 
 function candidate(
@@ -43,11 +44,18 @@ describe("difficulty decision", () => {
   it("parses compact JSON and integer-only fallbacks", () => {
     expect(
       parseDifficultyDecision('{"difficulty":87,"modelOverride":"Fable 5"}'),
-    ).toEqual({ difficulty: 87, modelOverride: "Fable 5" });
+    ).toEqual({ difficulty: 87, modelOverride: "Fable 5", taskType: null });
     expect(parseDifficultyDecision("12")).toEqual({
       difficulty: 12,
       modelOverride: null,
+      taskType: null,
     });
+  });
+
+  it("parses a multimodal task type from classifier JSON", () => {
+    expect(
+      parseDifficultyDecision('{"difficulty":20,"taskType":"vision"}'),
+    ).toEqual({ difficulty: 20, modelOverride: null, taskType: "vision" });
   });
 
   it("uses Cursor's lowest launchable reasoning despite a none model row", () => {
@@ -432,5 +440,94 @@ describe("bandMatchesDifficulty (native range)", () => {
     expect(
       difficultyBandSelection(claudeOnly, quota, request, 85, 50, false, highDifficultyOnly),
     ).toMatchObject({ providerId: "claude-code" });
+  });
+});
+
+describe("task-type band selection", () => {
+  const request = {
+    providerId: "codex",
+    model: "gpt-5.6-sol",
+    permissionMode: "accept-edits",
+  } as unknown as NewThreadRequest;
+  const candidates = [
+    candidate("antigravity", "gemini-3.7-flash-high", ["medium"]),
+    candidate("codex", "gpt-5.6-luna", ["low", "medium"]),
+  ];
+  const quota = new Map([
+    ["antigravity", 1],
+    ["codex", 1],
+  ]);
+
+  it("returns null without a task type or configured bands", () => {
+    expect(
+      taskTypeBandSelection(
+        candidates,
+        quota,
+        request,
+        null,
+        50,
+        false,
+        [{ taskType: "vision", fallbackChain: ["antigravity"] }],
+      ),
+    ).toBeNull();
+    expect(
+      taskTypeBandSelection(candidates, quota, request, "vision", 50, false, []),
+    ).toBeNull();
+  });
+
+  it("uses the matching task type band's fallback chain", () => {
+    expect(
+      taskTypeBandSelection(
+        candidates,
+        quota,
+        request,
+        "vision",
+        50,
+        false,
+        [{ taskType: "vision", fallbackChain: ["antigravity"] }],
+      ),
+    ).toMatchObject({ providerId: "antigravity" });
+  });
+
+  it("matches task type bands case-insensitively", () => {
+    expect(
+      taskTypeBandSelection(
+        candidates,
+        quota,
+        request,
+        "ViSiOn",
+        50,
+        false,
+        [{ taskType: "VISION", fallbackChain: ["antigravity"] }],
+      ),
+    ).toMatchObject({ providerId: "antigravity" });
+  });
+
+  it("returns null when no task type band matches", () => {
+    expect(
+      taskTypeBandSelection(
+        candidates,
+        quota,
+        request,
+        "audio",
+        50,
+        false,
+        [{ taskType: "vision", fallbackChain: ["antigravity"] }],
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when the matching band's chain has no eligible candidate", () => {
+    expect(
+      taskTypeBandSelection(
+        candidates,
+        quota,
+        request,
+        "vision",
+        50,
+        false,
+        [{ taskType: "vision", fallbackChain: ["claude-code"] }],
+      ),
+    ).toBeNull();
   });
 });
