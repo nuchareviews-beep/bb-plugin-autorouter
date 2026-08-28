@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NewThreadRequest } from "@get-bb/plugin-sdk";
+import type { BbPluginApi, NewThreadRequest } from "@get-bb/plugin-sdk";
 import { rankAutoModelOptions } from "./benchmarks.js";
 import type { AutoModelCandidate, ReasoningLevel } from "./benchmarks.js";
 import {
@@ -13,7 +13,11 @@ import {
   isRoutableProvider,
   difficultyBandSelection,
   bandMatchesDifficulty,
+  checkEscalation,
+  consumeEscalation,
+  escalationRoute,
 } from "./router.js";
+import type { EscalationRule } from "./settings.js";
 
 function candidate(
   providerId: string,
@@ -37,6 +41,19 @@ function candidate(
       isDefault: false,
     },
   };
+}
+
+function fakeBb(storage: Map<string, unknown>): BbPluginApi {
+  return {
+    storage: {
+      kv: {
+        get: async (key: string) => storage.get(key),
+        set: async (key: string, value: unknown) => {
+          storage.set(key, value);
+        },
+      },
+    },
+  } as unknown as BbPluginApi;
 }
 
 describe("difficulty decision", () => {
@@ -186,6 +203,86 @@ describe("provider quota", () => {
     expect(remaining.get("codex")).toBe(1);
     expect(remaining.get("claude-code")).toBe(0);
     expect(remaining.get("acp-cursor")).toBe(1);
+  });
+});
+
+describe("escalation windows", () => {
+  const rule: EscalationRule = {
+    id: "codex-to-claude",
+    fromProvider: "codex",
+    toModel: "claude-code/claude-fable-5",
+    responseLimit: 2,
+    handoffNote: "Continue with the established context.",
+  };
+
+  it("does not trigger when the source provider still has quota", async () => {
+    const storage = new Map<string, unknown>();
+    await expect(
+      checkEscalation(fakeBb(storage), [rule], new Map([["codex", 0.5]])),
+    ).resolves.toBeNull();
+    expect(storage.get("escalation-state")).toBeUndefined();
+  });
+
+  it("starts a window when the source provider is exhausted", async () => {
+    const storage = new Map<string, unknown>();
+    await expect(
+      checkEscalation(fakeBb(storage), [rule], new Map([["codex", 0]])),
+    ).resolves.toEqual({ rule, note: rule.handoffNote });
+    expect(storage.get("escalation-state")).toEqual({
+      [rule.id]: { responsesRemaining: rule.responseLimit },
+    });
+  });
+
+  it("returns an active window without restarting its counter", async () => {
+    const storage = new Map<string, unknown>([
+      ["escalation-state", { [rule.id]: { responsesRemaining: 1 } }],
+    ]);
+    await expect(
+      checkEscalation(fakeBb(storage), [rule], new Map([["codex", 0]])),
+    ).resolves.toEqual({ rule, note: rule.handoffNote });
+    expect(storage.get("escalation-state")).toEqual({
+      [rule.id]: { responsesRemaining: 1 },
+    });
+  });
+
+  it("consumes a window and removes it once the counter reaches zero", async () => {
+    const storage = new Map<string, unknown>([
+      ["escalation-state", { [rule.id]: { responsesRemaining: 2 } }],
+    ]);
+    const bb = fakeBb(storage);
+    await consumeEscalation(bb, rule.id);
+    expect(storage.get("escalation-state")).toEqual({
+      [rule.id]: { responsesRemaining: 1 },
+    });
+    await consumeEscalation(bb, rule.id);
+    expect(storage.get("escalation-state")).toEqual({});
+    await expect(consumeEscalation(bb, rule.id)).resolves.toBeUndefined();
+  });
+
+  it("selects the configured eligible target model or falls through", () => {
+    const request = {
+      providerId: "codex",
+      model: "gpt-5.6-sol",
+      permissionMode: "accept-edits",
+    } as unknown as NewThreadRequest;
+    const target = candidate("claude-code", "claude-fable-5", ["medium"]);
+    const quota = new Map([["claude-code", 1]]);
+    expect(
+      escalationRoute([target], quota, request, 50, 50, rule),
+    ).toMatchObject({
+      providerId: "claude-code",
+      model: "claude-fable-5",
+    });
+    expect(
+      escalationRoute(
+        [candidate("claude-code", "claude-fable-4", ["medium"])],
+        quota,
+        request,
+        50,
+        50,
+        rule,
+      ),
+    ).toBeNull();
   });
 });
 
