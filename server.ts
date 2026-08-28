@@ -136,6 +136,22 @@ function formatSettings(settings: AutorouterSettings, json: boolean): string {
             .join(" | ")
         : "(none — always uses benchmark-ranked selection)"
     }`,
+    `Task-type bands: ${
+      settings.taskTypeBands.length > 0
+        ? settings.taskTypeBands
+            .map((band) => `${band.taskType}: ${band.fallbackChain.join(" -> ") || "(empty)"}`)
+            .join(" | ")
+        : "(none)"
+    }`,
+    `Excluded models: ${settings.excludedModels.length > 0 ? settings.excludedModels.join(", ") : "(none)"}`,
+    `Allowed providers: ${settings.allowedProviders.length > 0 ? settings.allowedProviders.join(", ") : "(unrestricted)"}`,
+    `Escalation rules: ${
+      settings.escalationRules.length > 0
+        ? settings.escalationRules
+            .map((rule) => `${rule.id} (${rule.fromProvider} exhausted -> ${rule.toModel} for ${rule.responseLimit})`)
+            .join(" | ")
+        : "(none)"
+    }`,
     `Custom instructions: ${settings.customInstructions || "(none)"}`,
     "",
   ].join("\n");
@@ -244,7 +260,7 @@ export default async function plugin(bb: BbPluginApi) {
         name: "config",
         summary: "Update Autorouter settings",
         usage:
-          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--automatic-fallback provider/model,provider/model,...] [--difficulty-bands '[{\"minDifficulty\":N|null,\"maxDifficulty\":N|null,\"fallbackChain\":[...]}]'] [--instructions text] [--json]",
+          "bb autorouter config [--enabled true|false] [--frugality 0-100] [--decision-agent automatic|provider/model] [--automatic-fallback provider/model,provider/model,...] [--difficulty-bands '[{\"minDifficulty\":N|null,\"maxDifficulty\":N|null,\"fallbackChain\":[...]}]'] [--task-type-bands '[{\"taskType\":str,\"fallbackChain\":[...]}]'] [--excluded-models provider,provider/model,...] [--allowed-providers provider,provider,...] [--escalation-rules '[{\"id\":str,\"fromProvider\":str,\"toModel\":str,\"responseLimit\":N,\"handoffNote\":str}]'] [--instructions text] [--json]",
       },
       {
         name: "route",
@@ -295,6 +311,36 @@ export default async function plugin(bb: BbPluginApi) {
                 );
               }
               patch.difficultyBands = parsedBands as AutorouterSettings["difficultyBands"];
+            } else if (flag === "--task-type-bands") {
+              let parsedTaskBands: unknown;
+              try {
+                parsedTaskBands = JSON.parse(value);
+              } catch {
+                throw new Error(
+                  '--task-type-bands expects JSON, e.g. \'[{"taskType":"vision","fallbackChain":["antigravity"]}]\'',
+                );
+              }
+              patch.taskTypeBands = parsedTaskBands as AutorouterSettings["taskTypeBands"];
+            } else if (flag === "--excluded-models")
+              patch.excludedModels = value
+                .split(",")
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
+            else if (flag === "--allowed-providers")
+              patch.allowedProviders = value
+                .split(",")
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
+            else if (flag === "--escalation-rules") {
+              let parsedRules: unknown;
+              try {
+                parsedRules = JSON.parse(value);
+              } catch {
+                throw new Error(
+                  '--escalation-rules expects JSON, e.g. \'[{"id":"claude-to-codex","fromProvider":"claude-code","toModel":"codex/gpt-5.6-terra","responseLimit":3,"handoffNote":"Picking up after Claude hit its usage limit. Check project instructions for current state and required standards before continuing."}]\'',
+                );
+              }
+              patch.escalationRules = parsedRules as AutorouterSettings["escalationRules"];
             } else if (flag === "--instructions")
               patch.customInstructions = value;
             else throw new Error(`Unknown config flag: ${flag}`);

@@ -47,6 +47,10 @@ export interface ResolvedRoute {
   providerId: string;
   reasoningLevel: ReasoningLevel;
   supportsServiceTier: boolean;
+  /** Set when this route came from an active escalation window; the caller
+   * (createRoutedThread) prepends it to the spawned thread's prompt so the
+   * escalated model knows it's picking up mid-task. Absent/null otherwise. */
+  escalationNote?: string | null;
 }
 
 export interface RoutedThreadResult extends ResolvedRoute {
@@ -802,9 +806,37 @@ export async function resolveRoute(
   settings: AutorouterSettings,
 ): Promise<ResolvedRoute> {
   if (!settings.enabled) throw new Error("Autorouter is disabled");
-  const candidates = await loadCandidates(bb, request);
+  const rawCandidates = await loadCandidates(bb, request);
+  // Exclusions and the provider allowlist apply everywhere downstream --
+  // classifier selection, task-type/difficulty bands, benchmark ranking,
+  // and escalation targets all draw from this filtered pool, not the raw
+  // discovery result.
+  const candidates = filterExcludedAndDisallowed(rawCandidates, settings);
   const usage = await loadUsage(bb, request);
   const quota = quotaRemainingByProvider(usage);
+
+  // Escalation takes priority over everything else, including
+  // classification (skipping it saves the classifier call entirely when a
+  // window is active). If the escalated model isn't actually reachable
+  // right now, don't consume a response from the window on this attempt --
+  // fall through to normal routing and let the window stay open for a
+  // request that can actually use it.
+  const activeEscalation = await checkEscalation(bb, settings.escalationRules, quota);
+  if (activeEscalation) {
+    const escalated = escalationRoute(
+      candidates,
+      quota,
+      request,
+      DEFAULT_DIFFICULTY,
+      settings.frugality,
+      activeEscalation.rule,
+    );
+    if (escalated) {
+      await consumeEscalation(bb, activeEscalation.rule.id);
+      return { ...escalated, escalationNote: activeEscalation.note || null };
+    }
+  }
+
   const task = taskText(request.input);
   let decision: DifficultyDecision = {
     difficulty: DEFAULT_DIFFICULTY,
@@ -850,6 +882,19 @@ export async function resolveRoute(
     eligibleOverride.length > 0 ? eligibleOverride : quotaEligible;
   const overrideApplied = eligibleOverride.length > 0;
   if (!overrideApplied) {
+    // Task type is a stronger signal than raw difficulty for work that
+    // isn't hard, just a different kind (e.g. "describe this image"), so
+    // it's checked first.
+    const typed = taskTypeBandSelection(
+      quotaEligible,
+      quota,
+      request,
+      decision.taskType ?? null,
+      settings.frugality,
+      overrideApplied,
+      settings.taskTypeBands,
+    );
+    if (typed) return typed;
     const banded = difficultyBandSelection(
       quotaEligible,
       quota,
@@ -892,8 +937,18 @@ export async function createRoutedThread(
   const route = await resolveRoute(bb, request, settings);
   const { serviceTier: requestedServiceTier, ...requestWithoutServiceTier } =
     request;
+  // An active escalation's handoff note goes in as its own text part ahead
+  // of the user's actual prompt, so the escalated model gets it as context
+  // rather than it being silently absent from what the model sees.
+  const inputWithEscalationNote = route.escalationNote
+    ? [
+        { type: "text" as const, mentions: [], text: route.escalationNote },
+        ...requestWithoutServiceTier.input,
+      ]
+    : requestWithoutServiceTier.input;
   const thread = await bb.sdk.threads.spawn({
     ...requestWithoutServiceTier,
+    input: inputWithEscalationNote,
     ...(route.supportsServiceTier && requestedServiceTier
       ? { serviceTier: requestedServiceTier }
       : {}),
