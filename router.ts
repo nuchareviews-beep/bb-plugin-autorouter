@@ -814,7 +814,6 @@ export async function resolveRoute(
   const candidates = filterExcludedAndDisallowed(rawCandidates, settings);
   const usage = await loadUsage(bb, request);
   const quota = quotaRemainingByProvider(usage);
-  bb.log.info(`TEMP-DEBUG quota: ${JSON.stringify(Object.fromEntries(quota))}`);
 
   // Escalation takes priority over everything else, including
   // classification (skipping it saves the classifier call entirely when a
