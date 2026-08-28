@@ -1,7 +1,7 @@
 /*
  * The composer's provider/model picker is owned by bb, so Auto Router restyles
  * it from the outside: the real model name is hidden and the label is redrawn
- * from `--autorouter-picker-label`. Idle that reads "Auto"; while a submission
+ * from `--autorouter-picker-label`. Idle text reads "Auto"; while a submission
  * is being routed the page sets the property to the animated selecting text,
  * so the status appears on the control whose value is being decided.
  */
