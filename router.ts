@@ -11,6 +11,7 @@ import {
   AUTOMATIC_DECISION_AGENT,
   type AutorouterSettings,
   type DifficultyBand,
+  type TaskTypeBand,
 } from "./settings.js";
 
 const MAX_TASK_TEXT_LENGTH = 20_000;
@@ -23,12 +24,14 @@ const difficultyDecisionSchema = z
   .object({
     difficulty: z.number().int().min(0).max(100),
     modelOverride: z.string().min(1).max(200).optional(),
+    taskType: z.string().min(1).max(100).optional(),
   })
   .strict();
 
 interface DifficultyDecision {
   difficulty: number;
   modelOverride: string | null;
+  taskType?: string | null;
 }
 
 export interface ResolvedRoute {
@@ -219,6 +222,8 @@ function difficultyPrompt(args: {
     'Return only compact JSON: {"difficulty": NUMBER}.',
     'Add "modelOverride" only when the task explicitly asks for a specific model, or when the user instructions below explicitly require a specific model for this task.',
     "Never choose or recommend a model on your own. When set, copy the requested model name as closely as possible.",
+    'When the task fundamentally involves analyzing an image, video, or audio input, add "taskType": "vision".',
+    'Omit "taskType" entirely for normal text or code tasks.',
     args.customInstructions.trim()
       ? `User rating instructions:\n${args.customInstructions.trim()}`
       : "",
@@ -238,6 +243,7 @@ export function parseDifficultyDecision(output: string): DifficultyDecision {
         return {
           difficulty: parsed.data.difficulty,
           modelOverride: parsed.data.modelOverride?.trim() || null,
+          taskType: parsed.data.taskType?.trim() || null,
         };
       }
     } catch {
@@ -246,7 +252,11 @@ export function parseDifficultyDecision(output: string): DifficultyDecision {
   }
   const integer = trimmed.match(/(?:^|\D)(100|[1-9]?\d)(?:\D|$)/u)?.[1];
   if (integer !== undefined) {
-    return { difficulty: Number(integer), modelOverride: null };
+    return {
+      difficulty: Number(integer),
+      modelOverride: null,
+      taskType: null,
+    };
   }
   throw new Error("The difficulty agent did not return a 0-100 score");
 }
@@ -634,6 +644,42 @@ export function difficultyBandSelection(
     const eligible = candidatesForChainEntry(candidates, quota, entry);
     if (eligible.length > 0) {
       return fallbackSelection(eligible, request, difficulty, frugality, overrideApplied);
+    }
+  }
+  return null;
+}
+
+/**
+ * Per-task-type model selection: the first case-insensitive matching band
+ * routes through its fallback chain before difficulty bands or benchmark
+ * ranking. The requested standalone API does not accept a difficulty score,
+ * so selected routes carry the classifier's neutral default score.
+ */
+export function taskTypeBandSelection(
+  candidates: AutoModelCandidate[],
+  quota: ReadonlyMap<string, number>,
+  request: NewThreadRequest,
+  taskType: string | null,
+  frugality: number,
+  overrideApplied: boolean,
+  bands: readonly TaskTypeBand[],
+): ResolvedRoute | null {
+  if (taskType === null || bands.length === 0) return null;
+  const normalizedTaskType = taskType.toLowerCase();
+  const band = bands.find(
+    (candidate) => candidate.taskType.toLowerCase() === normalizedTaskType,
+  );
+  if (!band) return null;
+  for (const entry of band.fallbackChain) {
+    const eligible = candidatesForChainEntry(candidates, quota, entry);
+    if (eligible.length > 0) {
+      return fallbackSelection(
+        eligible,
+        request,
+        DEFAULT_DIFFICULTY,
+        frugality,
+        overrideApplied,
+      );
     }
   }
   return null;
