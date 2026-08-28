@@ -307,34 +307,45 @@ describe("escalation windows", () => {
       checkEscalation(fakeBb(storage), [rule], new Map([["codex", 0]])),
     ).resolves.toEqual({ rule, note: rule.handoffNote });
     expect(storage.get("escalation-state")).toEqual({
-      [rule.id]: { responsesRemaining: rule.responseLimit },
+      [rule.id]: { awaitingRecovery: true, responsesRemaining: rule.responseLimit },
     });
   });
 
   it("returns an active window without restarting its counter", async () => {
     const storage = new Map<string, unknown>([
-      ["escalation-state", { [rule.id]: { responsesRemaining: 1 } }],
+      ["escalation-state", { [rule.id]: { awaitingRecovery: true, responsesRemaining: 1 } }],
     ]);
     await expect(
       checkEscalation(fakeBb(storage), [rule], new Map([["codex", 0]])),
     ).resolves.toEqual({ rule, note: rule.handoffNote });
     expect(storage.get("escalation-state")).toEqual({
-      [rule.id]: { responsesRemaining: 1 },
+      [rule.id]: { awaitingRecovery: true, responsesRemaining: 1 },
     });
   });
 
-  it("consumes a window and removes it once the counter reaches zero", async () => {
+  it("closes a window without reopening until the source provider recovers", async () => {
     const storage = new Map<string, unknown>([
-      ["escalation-state", { [rule.id]: { responsesRemaining: 2 } }],
+      ["escalation-state", { [rule.id]: { awaitingRecovery: true, responsesRemaining: 2 } }],
     ]);
     const bb = fakeBb(storage);
     await consumeEscalation(bb, rule.id);
     expect(storage.get("escalation-state")).toEqual({
-      [rule.id]: { responsesRemaining: 1 },
+      [rule.id]: { awaitingRecovery: true, responsesRemaining: 1 },
     });
     await consumeEscalation(bb, rule.id);
+    expect(storage.get("escalation-state")).toEqual({
+      [rule.id]: { awaitingRecovery: true, responsesRemaining: 0 },
+    });
+    await expect(
+      checkEscalation(bb, [rule], new Map([["codex", 0]])),
+    ).resolves.toBeNull();
+    await expect(
+      checkEscalation(bb, [rule], new Map([["codex", 1]])),
+    ).resolves.toBeNull();
     expect(storage.get("escalation-state")).toEqual({});
-    await expect(consumeEscalation(bb, rule.id)).resolves.toBeUndefined();
+    await expect(
+      checkEscalation(bb, [rule], new Map([["codex", 0]])),
+    ).resolves.toEqual({ rule, note: rule.handoffNote });
   });
 
   it("selects the configured eligible target model or falls through", () => {

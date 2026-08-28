@@ -57,7 +57,10 @@ export interface RoutedThreadResult extends ResolvedRoute {
   threadId: string;
 }
 
-type EscalationState = Record<string, { responsesRemaining: number }>;
+type EscalationState = Record<
+  string,
+  { awaitingRecovery: boolean; responsesRemaining: number }
+>;
 
 type UsageResponse = Awaited<
   ReturnType<BbPluginApi["sdk"]["system"]["usageLimits"]>
@@ -236,11 +239,17 @@ function parseEscalationState(value: unknown): EscalationState {
         Array.isArray(entry) ||
         !("responsesRemaining" in entry) ||
         typeof entry.responsesRemaining !== "number" ||
-        entry.responsesRemaining <= 0
+        entry.responsesRemaining < 0
       ) {
         return [];
       }
-      return [[id, { responsesRemaining: entry.responsesRemaining }]];
+      return [[id, {
+        awaitingRecovery:
+          "awaitingRecovery" in entry && entry.awaitingRecovery === false
+            ? false
+            : true,
+        responsesRemaining: entry.responsesRemaining,
+      }]];
     }),
   );
 }
@@ -257,17 +266,32 @@ export async function checkEscalation(
   quota: ReadonlyMap<string, number>,
 ): Promise<{ rule: EscalationRule; note: string } | null> {
   const state = await readEscalationState(bb);
+  let stateChanged = false;
+  // A completed window stays disarmed while the source provider remains
+  // exhausted. Only a positive quota observation re-arms the rule, so a
+  // responseLimit of 1 really means one routed thread rather than one per
+  // request forever.
   for (const rule of rules) {
-    if ((state[rule.id]?.responsesRemaining ?? 0) > 0) {
-      return { rule, note: rule.handoffNote };
+    if ((quota.get(rule.fromProvider) ?? 1) > 0 && state[rule.id] !== undefined) {
+      delete state[rule.id];
+      stateChanged = true;
     }
   }
   for (const rule of rules) {
+    const entry = state[rule.id];
     if ((quota.get(rule.fromProvider) ?? 1) > 0) continue;
-    state[rule.id] = { responsesRemaining: rule.responseLimit };
+    if ((entry?.responsesRemaining ?? 0) > 0) {
+      return { rule, note: rule.handoffNote };
+    }
+    if (entry?.awaitingRecovery) continue;
+    state[rule.id] = {
+      awaitingRecovery: true,
+      responsesRemaining: rule.responseLimit,
+    };
     await bb.storage.kv.set(ESCALATION_STATE_KEY, state);
     return { rule, note: rule.handoffNote };
   }
+  if (stateChanged) await bb.storage.kv.set(ESCALATION_STATE_KEY, state);
   return null;
 }
 
@@ -279,7 +303,7 @@ export async function consumeEscalation(
   const entry = state[ruleId];
   if (!entry) return;
   entry.responsesRemaining -= 1;
-  if (entry.responsesRemaining <= 0) delete state[ruleId];
+  if (entry.responsesRemaining < 0) entry.responsesRemaining = 0;
   await bb.storage.kv.set(ESCALATION_STATE_KEY, state);
 }
 
