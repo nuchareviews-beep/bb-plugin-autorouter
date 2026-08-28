@@ -352,17 +352,6 @@ export default async function plugin(bb: BbPluginApi) {
           };
         }
 
-        if (command === "temp-seed-escalation") {
-          // TEMP debug command, will be reverted -- seeds an active
-          // escalation window directly in KV to test resolveRoute's
-          // integration without needing a real quota exhaustion.
-          const ruleId = args[0];
-          const count = Number(args[1] ?? "1");
-          if (!ruleId) throw new Error("Provide a rule id");
-          await bb.storage.kv.set("escalation-state", { [ruleId]: { responsesRemaining: count } });
-          return { exitCode: 0, stdout: `seeded ${ruleId} with ${count} remaining\n` };
-        }
-
         if (command === "route") {
           if (!ctx.projectId) {
             throw new Error("Run this command from a bb project thread");
