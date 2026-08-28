@@ -43,6 +43,43 @@ const difficultyBandSchema = z
 
 export type DifficultyBand = z.infer<typeof difficultyBandSchema>;
 
+const taskTypeBandSchema = z
+  .object({
+    /** Free-text label the classifier is asked to match against (case
+     * insensitive), e.g. "vision" for image/video/audio analysis tasks.
+     * Checked before difficultyBands — a task-type match is a stronger
+     * signal than a raw difficulty score for tasks that aren't really
+     * "hard", just a different kind of work (e.g. describing an image). */
+    taskType: z.string().min(1).max(100),
+    fallbackChain: z.array(providerOrModelSchema).max(20),
+  })
+  .strict();
+
+export type TaskTypeBand = z.infer<typeof taskTypeBandSchema>;
+
+const escalationRuleSchema = z
+  .object({
+    id: z.string().min(1).max(100),
+    /** When this provider's quota reads exhausted (remaining <= 0) at
+     * routing time, this rule triggers. */
+    fromProvider: z.string().min(1).max(100),
+    /** Where routing goes for the duration of the escalation window. */
+    toModel: providerModelSchema,
+    /** How many *routed threads* (not turns within one thread — autorouter
+     * only runs at thread-creation time, it doesn't sit inline on an
+     * existing conversation) use `toModel` before the window closes and
+     * routing reverts to normal. */
+    responseLimit: z.number().int().min(1).max(50),
+    /** Prepended to the routed thread's prompt while this rule is active,
+     * so the escalated model knows it's picking up mid-task and what
+     * standard to hold itself to — e.g. reference project-instructions.
+     * Optional; empty means no note is added. */
+    handoffNote: z.string().max(2000),
+  })
+  .strict();
+
+export type EscalationRule = z.infer<typeof escalationRuleSchema>;
+
 export const autorouterSettingsSchema = z
   .object({
     enabled: z.boolean(),
@@ -77,6 +114,45 @@ export const autorouterSettingsSchema = z
      * editable band — add, remove, reorder, or clear bands freely.
      */
     difficultyBands: z.array(difficultyBandSchema).max(20),
+    /**
+     * Task-type routing, checked before difficultyBands. See
+     * taskTypeBandSchema for why this is a separate dimension from
+     * difficulty (e.g. "describe this image" isn't hard, it's just a
+     * different kind of task that needs a multimodal-capable model).
+     * Empty by default — nothing routes by task type unless configured.
+     */
+    taskTypeBands: z.array(taskTypeBandSchema).max(20),
+    /**
+     * Global model exclude-list: provider or provider/model entries that
+     * are never selectable by any routing path (automatic chain, bands,
+     * benchmark ranking, fallback). Filtered out of candidates before
+     * anything else runs. Empty by default — nothing excluded unless
+     * configured.
+     */
+    excludedModels: z.array(providerOrModelSchema).max(50),
+    /**
+     * If non-empty, restricts every routing path to only these providers —
+     * the buildable form of "only ever route delegated work through
+     * OmniRoute": autorouter IS the thing that picks a model for new
+     * delegated/subagent threads in this stack, so constraining its own
+     * candidate pool is the actual enforcement point. This cannot force
+     * Codex, Claude Code, or Antigravity to stop using their own native
+     * tool loops for work they run directly (see AGENTS.md's Known Gaps —
+     * that's a structural ceiling, not something any setting can close).
+     * Empty means unrestricted (every routable provider is eligible),
+     * matching prior behavior.
+     */
+    allowedProviders: z.array(z.string().min(1).max(100)).max(20),
+    /**
+     * Quota- or failure-triggered temporary escalation. When a rule's
+     * fromProvider reads quota-exhausted at routing time, the next
+     * responseLimit routed threads go straight to toModel instead of
+     * normal routing, then the window closes and routing reverts. Runtime
+     * state (how many responses are left in an active window) lives in
+     * this plugin's own KV store, not here — this is just the rule
+     * definitions. Empty by default.
+     */
+    escalationRules: z.array(escalationRuleSchema).max(20),
     customInstructions: z.string().max(12_000),
     frugality: z.number().int().min(0).max(100),
   })
@@ -97,6 +173,14 @@ export const defaultAutorouterSettings: AutorouterSettings = {
       fallbackChain: ["antigravity", "codex", "claude-code"],
     },
   ],
+  // Antigravity (Gemini) is the only multimodal-capable provider in this
+  // stack (see AGENTS.md's role assignment), so it's a reasonable stock
+  // default for a "vision" task-type band rather than an empty array —
+  // still just a plain setting, reorder/clear it freely.
+  taskTypeBands: [{ taskType: "vision", fallbackChain: ["antigravity"] }],
+  excludedModels: [],
+  allowedProviders: [],
+  escalationRules: [],
   customInstructions: "",
   frugality: 50,
 };
