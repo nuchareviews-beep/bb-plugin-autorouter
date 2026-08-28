@@ -115,9 +115,16 @@ export function isModelOverrideGrounded(
 }
 
 function remainingQuota(
-  usage: UsageEntry,
+  usage: UsageEntry | undefined,
   options: { useSpendWhenIncludedQuotaIsExhausted: boolean },
 ): number {
+  // sdk.system.usageLimits() has been observed to omit a provider's entry
+  // entirely rather than report a typed error status for it (a bb-core
+  // quirk seen independently in bb-plugin-usage's own provider-limits
+  // fetch, not something this plugin can fix). Treat a missing entry the
+  // same as an in-band "error" status: don't let a quota-fetch failure
+  // silently break routing.
+  if (usage === undefined) return 1;
   if (
     usage.status === "not_installed" ||
     usage.status === "unauthenticated" ||

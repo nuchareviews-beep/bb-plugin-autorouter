@@ -172,6 +172,21 @@ describe("provider quota", () => {
     expect(remaining.get("claude-code")).toBe(0);
     expect(remaining.get("acp-cursor")).toBe(0.75);
   });
+
+  it("doesn't crash when sdk.system.usageLimits() omits a provider's entry entirely", () => {
+    // Real regression: bb-core has been observed to omit a key from the
+    // usageLimits response rather than report a typed error status for it,
+    // which used to throw "Cannot read properties of undefined (reading
+    // 'status')" and crash the whole route.
+    const remaining = quotaRemainingByProvider({
+      codex: undefined,
+      claudeCode: { status: "unauthenticated" },
+      cursor: { status: "ok", accountEmail: null, planLabel: "Pro", windows: [] },
+    } as unknown as Parameters<typeof quotaRemainingByProvider>[0]);
+    expect(remaining.get("codex")).toBe(1);
+    expect(remaining.get("claude-code")).toBe(0);
+    expect(remaining.get("acp-cursor")).toBe(1);
+  });
 });
 
 describe("leastClassifierPermissionMode", () => {
