@@ -4,6 +4,7 @@ import { rankAutoModelOptions } from "./benchmarks.js";
 import type { AutoModelCandidate, ReasoningLevel } from "./benchmarks.js";
 import {
   fallbackSelection,
+  filterExcludedAndDisallowed,
   isModelOverrideGrounded,
   leastClassifierPermissionMode,
   leastClassifierReasoning,
@@ -14,6 +15,7 @@ import {
   difficultyBandSelection,
   bandMatchesDifficulty,
 } from "./router.js";
+import { defaultAutorouterSettings } from "./settings.js";
 
 function candidate(
   providerId: string,
@@ -145,6 +147,63 @@ describe("model overrides", () => {
       ]),
     ).toBe(false);
     expect(matchModelOverride(candidates, "best")).toEqual([]);
+  });
+});
+
+describe("excluded models and allowed providers", () => {
+  const candidates = [
+    candidate("codex", "gpt-5.6-sol", ["medium"]),
+    candidate("codex", "gpt-5.6-luna", ["medium"]),
+    candidate("claude-code", "claude-fable-5", ["medium"]),
+    candidate("antigravity", "gemini-3.7-flash-high", ["medium"]),
+  ];
+  const settings = (
+    overrides: Partial<typeof defaultAutorouterSettings>,
+  ) => ({ ...defaultAutorouterSettings, ...overrides });
+
+  it("excludes every model from a bare provider entry", () => {
+    expect(
+      filterExcludedAndDisallowed(
+        candidates,
+        settings({ excludedModels: ["codex"] }),
+      ),
+    ).toEqual(candidates.slice(2));
+  });
+
+  it("excludes an exact provider/model pin without removing its siblings", () => {
+    expect(
+      filterExcludedAndDisallowed(
+        candidates,
+        settings({ excludedModels: ["codex/gpt-5.6-sol"] }),
+      ),
+    ).toEqual([candidates[1], candidates[2], candidates[3]]);
+  });
+
+  it("restricts candidates to the allowed provider subset", () => {
+    expect(
+      filterExcludedAndDisallowed(
+        candidates,
+        settings({ allowedProviders: ["codex", "antigravity"] }),
+      ),
+    ).toEqual([candidates[0], candidates[1], candidates[3]]);
+  });
+
+  it("leaves candidates unrestricted when the allowlist is empty", () => {
+    expect(
+      filterExcludedAndDisallowed(candidates, settings({ allowedProviders: [] })),
+    ).toEqual(candidates);
+  });
+
+  it("applies exclusions before restricting to allowed providers", () => {
+    expect(
+      filterExcludedAndDisallowed(
+        candidates,
+        settings({
+          allowedProviders: ["codex", "claude-code"],
+          excludedModels: ["codex/gpt-5.6-sol"],
+        }),
+      ),
+    ).toEqual([candidates[1], candidates[2]]);
   });
 });
 

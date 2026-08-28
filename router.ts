@@ -99,6 +99,28 @@ export function matchModelOverride(
   );
 }
 
+export function filterExcludedAndDisallowed(
+  candidates: AutoModelCandidate[],
+  settings: AutorouterSettings,
+): AutoModelCandidate[] {
+  const withoutExcluded = candidates.filter((candidate) =>
+    !settings.excludedModels.some((entry) => {
+      const [providerId, model] = entry.split("/", 2);
+      return (
+        candidate.providerId === providerId &&
+        (model === undefined ||
+          candidate.model.model === model ||
+          candidate.model.id === model)
+      );
+    }),
+  );
+  // Exclusions are the hard safety boundary, so apply them before the
+  // allowlist: a permitted provider must not make an excluded model eligible.
+  if (settings.allowedProviders.length === 0) return withoutExcluded;
+  const allowed = new Set(settings.allowedProviders);
+  return withoutExcluded.filter((candidate) => allowed.has(candidate.providerId));
+}
+
 export function isModelOverrideGrounded(
   requestedModel: string,
   candidates: AutoModelCandidate[],
