@@ -271,6 +271,17 @@ describe("provider quota", () => {
     expect(remaining.get("claude-code")).toBe(0);
     expect(remaining.get("acp-cursor")).toBe(1);
   });
+
+  it("uses bb's current provider-id usage keys for quota exhaustion", () => {
+    const remaining = quotaRemainingByProvider({
+      codex: { status: "ok", accountEmail: null, planLabel: "Plus", windows: [{ label: "Session", usedPercent: 25, resetsAt: null }] },
+      "claude-code": { status: "ok", accountEmail: null, planLabel: "Pro", windows: [{ label: "Session", usedPercent: 100, resetsAt: null }] },
+      "acp-cursor": { status: "ok", accountEmail: null, planLabel: "Pro", windows: [{ label: "Session", usedPercent: 50, resetsAt: null }] },
+    } as unknown as Parameters<typeof quotaRemainingByProvider>[0]);
+    expect(remaining.get("codex")).toBe(0.75);
+    expect(remaining.get("claude-code")).toBe(0);
+    expect(remaining.get("acp-cursor")).toBe(0.5);
+  });
 });
 
 describe("escalation windows", () => {

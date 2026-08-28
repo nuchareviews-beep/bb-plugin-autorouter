@@ -196,22 +196,28 @@ function remainingQuota(
 export function quotaRemainingByProvider(
   usage: UsageResponse,
 ): ReadonlyMap<string, number> {
+  // bb 0.40 returns usage keyed by provider id (for example
+  // `"claude-code"`), whereas older SDK snapshots used camelCase fields.
+  // Accept both so an exhausted provider is never silently treated as
+  // available during a rolling bb/plugin update.
+  const entry = (providerId: string, legacyKey: string): UsageEntry | undefined =>
+    usage[providerId] ?? usage[legacyKey];
   return new Map([
     [
       "codex",
-      remainingQuota(usage.codex, {
+      remainingQuota(entry("codex", "codex"), {
         useSpendWhenIncludedQuotaIsExhausted: false,
       }),
     ],
     [
       "claude-code",
-      remainingQuota(usage.claudeCode, {
+      remainingQuota(entry("claude-code", "claudeCode"), {
         useSpendWhenIncludedQuotaIsExhausted: false,
       }),
     ],
     [
       "acp-cursor",
-      remainingQuota(usage.cursor, {
+      remainingQuota(entry("acp-cursor", "cursor"), {
         useSpendWhenIncludedQuotaIsExhausted: true,
       }),
     ],
